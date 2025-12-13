@@ -1,0 +1,5 @@
+{
+  "name": "Fernando Intelligent Manufacturing Assistant",
+  "description": "A platform to assist the manufacturing industry by centralizing documentation with an AI assistant, managing production audits, and administering certified process documents according to ISO9001:2015 and IATF:16949 standards.",
+  "requestFramePermissions": []
+}
