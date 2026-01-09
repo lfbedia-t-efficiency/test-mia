@@ -1,7 +1,8 @@
 
-import React, { useState, useEffect, useRef } from 'react';
-import { SearchIcon, FilterIcon, PlusCircleIcon, XIcon, WrenchScrewdriverIcon, CheckCircleIcon, ClockIcon, MicrophoneIcon, PaperclipIcon, CameraIcon, AIAssistantIcon, SendIcon, EyeIcon, SignalIcon, DocumentTextIcon, UserIcon, ArrowUpOnSquareIcon, TicketIcon, CalendarIcon } from '../components/icons/Icons';
-import { Plant, Process, Subprocess, Machine, WorkOrder, WorkOrderStatus, WorkOrderPriority, RiskLevel, MachineStatus, WorkOrderLog, TechnicalReport } from '../types';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
+import { SearchIcon, FilterIcon, PlusCircleIcon, XIcon, WrenchScrewdriverIcon, CheckCircleIcon, ClockIcon, MicrophoneIcon, PaperclipIcon, CameraIcon, AIAssistantIcon, SendIcon, EyeIcon, SignalIcon, DocumentTextIcon, UserIcon, ArrowUpOnSquareIcon, TicketIcon, CalendarIcon, CodeBracketIcon, TrashIcon, ArrowDownIcon, ArrowUpIcon, ArrowPathIcon, ChartBarIcon } from '../components/icons/Icons';
+import { Plant, Process, Subprocess, Machine, WorkOrder, WorkOrderStatus, WorkOrderPriority, RiskLevel, MachineStatus, WorkOrderLog, TechnicalReport, SupplyItem } from '../types';
+import CreateWorkOrderModal from '../components/CreateWorkOrderModal';
 
 interface TaWorkOrdersProps {
     plants?: Plant[];
@@ -35,12 +36,12 @@ const getStatusBadge = (status: WorkOrderStatus) => {
         unassigned: 'Por Asignar',
         assigned: 'Asignada',
         in_progress: 'En Ejecución',
-        on_hold: 'Pendiente Refacciones', 
+        on_hold: 'Pendiente Ref.', 
         testing: 'En Pruebas',
         closed: 'Cerrada',
         cancelled: 'Cancelada',
     };
-    return <span className={`px-2 py-1 rounded-full text-[10px] font-bold uppercase border ${styles[status]}`}>{labels[status]}</span>;
+    return <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase border ${styles[status]}`}>{labels[status]}</span>;
 };
 
 const getPriorityBadge = (priority: WorkOrderPriority) => {
@@ -49,7 +50,7 @@ const getPriorityBadge = (priority: WorkOrderPriority) => {
         P2: 'bg-yellow-100 text-yellow-700 border-yellow-200',
         P3: 'bg-blue-50 text-blue-600 border-blue-100',
     };
-    return <span className={`px-2 py-0.5 rounded text-xs font-bold border ${styles[priority]}`}>{priority}</span>;
+    return <span className={`px-2 py-0.5 rounded text-[10px] font-bold border ${styles[priority]}`}>{priority}</span>;
 };
 
 const getMachineStatusBadge = (status: MachineStatus) => {
@@ -62,58 +63,122 @@ const getMachineStatusBadge = (status: MachineStatus) => {
     return <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${styles[status]}`}>{status}</span>;
 };
 
-const calculateTimeElapsed = (dateString: string) => {
-    const start = new Date(dateString).getTime();
-    const now = new Date().getTime();
-    const diff = now - start;
-    
-    const hours = Math.floor(diff / (1000 * 60 * 60));
-    const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
-    const seconds = Math.floor((diff % (1000 * 60)) / 1000);
+const formatDuration = (ms: number) => {
+    if (ms < 0) ms = 0;
+    const seconds = Math.floor((ms / 1000) % 60);
+    const minutes = Math.floor((ms / (1000 * 60)) % 60);
+    const hours = Math.floor(ms / (1000 * 60 * 60));
 
     const pad = (n: number) => n.toString().padStart(2, '0');
-    return `${pad(hours)}:${pad(minutes)}:${pad(seconds)}`;
+    // HHH:MM:SS format as requested
+    return `${hours.toString().padStart(3, '0')}:${pad(minutes)}:${pad(seconds)}`;
+};
+
+const calculateNextOt = (orders: WorkOrder[]) => {
+    const ids = orders.map(o => {
+        const match = o.otNumber.match(/^OT-(\d+)$/);
+        return match ? parseInt(match[1], 10) : 0;
+    });
+    const maxId = Math.max(0, ...ids);
+    const nextId = maxId + 1;
+    return `OT-${nextId.toString().padStart(3, '0')}`;
 };
 
 // --- SUB-COMPONENTS (Extracted) ---
 
-const KPICard = ({ title, value, colorClass, subtitle }: any) => (
-    <div className={`bg-white p-4 rounded-lg shadow-sm border-l-4 ${colorClass} flex flex-col justify-between`}>
-        <p className="text-xs text-gray-500 uppercase font-bold">{title}</p>
-        <div className="flex items-end justify-between mt-2">
-            <span className="text-2xl font-bold text-gray-800">{value}</span>
-            {subtitle && <span className="text-xs text-gray-400">{subtitle}</span>}
+const KPICard = ({ title, value, colorClass, subtitle, trendColor }: any) => (
+    <div className={`bg-white p-3 rounded-lg shadow-sm border border-gray-200 flex flex-col justify-between min-h-[90px]`}>
+        <p className="text-[10px] text-gray-500 uppercase font-bold tracking-wide">{title}</p>
+        <div className="mt-2">
+            <span className={`text-2xl font-bold ${colorClass}`}>{value}</span>
+            {subtitle && <p className={`text-[10px] font-medium mt-1 ${trendColor || 'text-gray-400'}`}>{subtitle}</p>}
         </div>
     </div>
 );
 
-const DictationInput = ({ label, value, onChange, multiline = false }: any) => (
-    <div className="mb-3">
-        <label className="block text-xs font-bold text-gray-700 mb-1">{label}</label>
+const DictationInput = ({ label, value, onChange, multiline = false, disabled = false }: any) => (
+    <div className="mb-2">
+        <label className="block text-[10px] font-bold text-gray-500 uppercase mb-1">{label}</label>
         <div className="relative">
             {multiline ? (
                 <textarea 
-                    className="w-full p-2 pr-8 bg-white border border-gray-300 rounded text-sm text-gray-900 focus:ring-blue-500 focus:border-blue-500" 
-                    rows={2}
+                    className="w-full p-2 pr-8 bg-white border border-gray-300 rounded text-xs text-gray-900 focus:ring-blue-500 focus:border-blue-500 shadow-sm disabled:bg-gray-100 disabled:text-gray-600" 
+                    rows={4}
                     value={value}
                     onChange={onChange}
+                    disabled={disabled}
                 />
             ) : (
                 <input 
                     type="text" 
-                    className="w-full p-2 pr-8 bg-white border border-gray-300 rounded text-sm text-gray-900 focus:ring-blue-500 focus:border-blue-500"
+                    className="w-full p-2 pr-8 bg-white border border-gray-300 rounded text-xs text-gray-900 focus:ring-blue-500 focus:border-blue-500 shadow-sm disabled:bg-gray-100 disabled:text-gray-600"
                     value={value}
                     onChange={onChange}
+                    disabled={disabled}
                 />
             )}
-            <button className="absolute right-2 top-2 text-gray-400 hover:text-red-500 transition-colors" title="Dictar por voz">
-                <MicrophoneIcon className="w-4 h-4" />
-            </button>
+            {!disabled && (
+                <button className="absolute right-2 top-2 text-gray-400 hover:text-blue-500 transition-colors" title="Dictar por voz">
+                    <MicrophoneIcon className="w-3 h-3" />
+                </button>
+            )}
         </div>
     </div>
 );
 
-// -- MODALS --
+const DetailField = ({ label, value, highlight = false, alert = false }: { label: string, value: string | React.ReactNode, highlight?: boolean, alert?: boolean }) => (
+    <div className="flex flex-col">
+        <span className="text-[10px] font-bold text-gray-400 uppercase">{label}</span>
+        <span className={`text-xs font-medium whitespace-normal break-words ${alert ? 'text-red-600' : highlight ? 'text-blue-700' : 'text-gray-800'}`} title={typeof value === 'string' ? value : ''}>
+            {value || '--'}
+        </span>
+    </div>
+);
+
+// --- MODALS ---
+
+const ImageViewerModal: React.FC<{ isOpen: boolean; url: string | null; onClose: () => void }> = ({ isOpen, url, onClose }) => {
+    const [scale, setScale] = useState(1);
+    const [rotation, setRotation] = useState(0);
+
+    useEffect(() => {
+        setScale(1);
+        setRotation(0);
+    }, [url]);
+
+    if (!isOpen || !url) return null;
+
+    const handleZoomIn = (e: React.MouseEvent) => { e.stopPropagation(); setScale(prev => Math.min(prev + 0.5, 4)); };
+    const handleZoomOut = (e: React.MouseEvent) => { e.stopPropagation(); setScale(prev => Math.max(prev - 0.5, 0.5)); };
+    const handleRotate = (e: React.MouseEvent) => { e.stopPropagation(); setRotation(prev => (prev + 90) % 360); };
+    const handleReset = (e: React.MouseEvent) => { e.stopPropagation(); setScale(1); setRotation(0); };
+
+    return (
+        <div className="fixed inset-0 z-[100] bg-black/90 backdrop-blur-sm flex flex-col animate-fade-in" onClick={onClose}>
+            <div className="flex justify-between items-center p-4 bg-black/50 text-white z-10" onClick={e => e.stopPropagation()}>
+                <h3 className="font-bold text-sm flex items-center gap-2">
+                    <EyeIcon className="w-4 h-4"/> Visualizador de Evidencia
+                </h3>
+                <div className="flex items-center gap-2">
+                    <div className="bg-gray-800 rounded-lg p-1 flex items-center gap-1 border border-gray-700">
+                        <button onClick={handleZoomOut} className="p-2 hover:bg-gray-700 rounded transition-colors"><ArrowDownIcon className="w-4 h-4" /></button>
+                        <span className="text-xs font-mono w-12 text-center">{(scale * 100).toFixed(0)}%</span>
+                        <button onClick={handleZoomIn} className="p-2 hover:bg-gray-700 rounded transition-colors"><ArrowUpIcon className="w-4 h-4" /></button>
+                    </div>
+                    <button onClick={handleRotate} className="p-2 hover:bg-gray-800 rounded-full transition-colors"><ArrowPathIcon className="w-5 h-5"/></button>
+                    <button onClick={handleReset} className="p-2 hover:bg-gray-800 rounded-full transition-colors text-xs font-bold px-3">Reset</button>
+                    <div className="w-px h-6 bg-gray-700 mx-2"></div>
+                    <button onClick={onClose} className="p-2 hover:bg-red-600 rounded-full transition-colors ml-2"><XIcon className="w-6 h-6"/></button>
+                </div>
+            </div>
+            <div className="flex-1 overflow-auto flex items-center justify-center p-8 cursor-grab active:cursor-grabbing" onClick={e => e.stopPropagation()}>
+                <div className="transition-transform duration-200 ease-out" style={{ transform: `scale(${scale}) rotate(${rotation}deg)`, transformOrigin: 'center center' }}>
+                    <img src={url} alt="Evidence Detail" className="max-w-full max-h-[85vh] object-contain shadow-2xl rounded-sm" draggable={false}/>
+                </div>
+            </div>
+        </div>
+    );
+};
 
 const ConfirmationModal = ({ isOpen, title, message, onConfirm, onCancel, confirmColor = 'bg-blue-600' }: any) => {
     if (!isOpen) return null;
@@ -170,28 +235,60 @@ interface SidePanelProps {
     orders: WorkOrder[];
     onClose: () => void;
     onAssign: (id: string) => void;
-    onStatusChange: (id: string, newStatus: WorkOrderStatus, actionLabel: string, comment?: string) => void;
+    onStatusChange: (id: string, newStatus: WorkOrderStatus, actionLabel: string, comment?: string, closedAt?: string) => void;
 }
 
 const SidePanel: React.FC<SidePanelProps> = ({ selectedOrder, orders, onClose, onAssign, onStatusChange }) => {
     const o = orders.find(ord => ord.id === selectedOrder.id) || selectedOrder;
     const [tab, setTab] = useState<'form' | 'tracking'>('form');
     
+    // Timer State
+    const [timerDisplay, setTimerDisplay] = useState('000:00:00');
+
     // Local state for form
     const [techReport, setTechReport] = useState<TechnicalReport>(o.technicalReport || {
-         inspections: '', measurements: '', diagnosis: '', aiMatch: null, rootCause: '', actions: [], otherActionDetail: '', supplies: '', preventiveMeasures: ''
+         inspections: '', measurements: '', observations: '', diagnosis: '', aiMatch: null, rootCause: '', actions: [], otherActionDetail: '', supplies: [], preventiveMeasures: ''
     });
     
+    // AI Consultation State
+    const [isConsulting, setIsConsulting] = useState(false);
+    const [generatedDiagnosis, setGeneratedDiagnosis] = useState<{problem: string, repair: string, precautions: string} | null>(null);
+
     // Confirmation State
     const [confirmAction, setConfirmAction] = useState<{ isOpen: boolean, action: 'hold' | 'close' | 'cancel' | null }>({ isOpen: false, action: null });
 
+    // Viewer State
+    const [viewerUrl, setViewerUrl] = useState<string | null>(null);
+
     // Available Actions Checkboxes
     const actionOptions = [
-        'Ajuste', 'Limpieza', 'Sustitución de componente', 'Calibración', 'Actualización software',
-        'Reparación eléctrica', 'Reparación mecánica', 'Acción temporal', 'Solo verificación', 'Otro'
+        'Ajuste', 'Limpieza', 'Sustitución', 'Calibración', 'Software',
+        'Rep. Eléctrica', 'Rep. Mecánica', 'Temporal', 'Verificación', 'Otro'
     ];
 
+    const isClosed = o.status === 'closed' || o.status === 'cancelled';
+
+    // Timer Logic
+    useEffect(() => {
+        const updateTimer = () => {
+            const start = new Date(o.reportDate).getTime();
+            const end = o.closedAt ? new Date(o.closedAt).getTime() : Date.now();
+            const diff = end - start;
+            setTimerDisplay(formatDuration(diff));
+        };
+
+        updateTimer(); // Initial call
+        
+        let interval: ReturnType<typeof setInterval>;
+        if (!isClosed) {
+            interval = setInterval(updateTimer, 1000);
+        }
+
+        return () => clearInterval(interval);
+    }, [o.reportDate, o.closedAt, isClosed]);
+
     const handleCheckboxChange = (option: string) => {
+        if (isClosed) return;
         setTechReport(prev => {
             const newActions = prev.actions.includes(option) 
                 ? prev.actions.filter(a => a !== option)
@@ -200,224 +297,414 @@ const SidePanel: React.FC<SidePanelProps> = ({ selectedOrder, orders, onClose, o
         });
     };
 
+    const handleAddSupply = () => {
+        if (isClosed) return;
+        setTechReport(prev => ({
+            ...prev,
+            supplies: [...prev.supplies, { id: Date.now().toString(), description: '', quantity: '' }]
+        }));
+    };
+
+    const handleRemoveSupply = (id: string) => {
+        if (isClosed) return;
+        setTechReport(prev => ({
+            ...prev,
+            supplies: prev.supplies.filter(s => s.id !== id)
+        }));
+    };
+
+    const handleUpdateSupply = (id: string, field: 'description' | 'quantity', value: string) => {
+        if (isClosed) return;
+        setTechReport(prev => ({
+            ...prev,
+            supplies: prev.supplies.map(s => s.id === id ? { ...s, [field]: value } : s)
+        }));
+    };
+
+    const validateClosing = () => {
+        const r = techReport;
+        if (!r.inspections.trim() || !r.measurements.trim() || !r.diagnosis.trim() || !r.rootCause.trim() || !r.preventiveMeasures.trim()) {
+            alert("Para cerrar la orden, debe completar todos los campos de texto (Inspecciones, Medidas, Diagnóstico, Causa Raíz, Medidas Preventivas).");
+            return false;
+        }
+        if (r.actions.length === 0) {
+            alert("Debe seleccionar al menos una acción ejecutada.");
+            return false;
+        }
+        if (r.aiMatch === null) {
+            alert("Debe indicar si el diagnóstico coincidió con la IA.");
+            return false;
+        }
+        if (r.supplies.length === 0) {
+            alert("Debe registrar los Insumos Utilizados (o indicar 'Ninguno' si aplica, pero la lista no puede estar vacía).");
+            return false;
+        }
+        // Check if supply rows are filled
+        for (const s of r.supplies) {
+            if (!s.description.trim() || !s.quantity.trim()) {
+                alert("Complete la descripción y cantidad de todos los insumos agregados.");
+                return false;
+            }
+        }
+        return true;
+    };
+
     const handleExecuteAction = () => {
         if (!confirmAction.action) return;
         
-        let status: WorkOrderStatus = 'in_progress'; // default
-        let label = '';
-        
-        switch (confirmAction.action) {
-            case 'hold':
-                status = 'on_hold';
-                label = 'Pendiente Refacciones';
-                break;
-            case 'close':
-                status = 'closed';
-                label = 'Cierre de OT';
-                break;
-            case 'cancel':
-                status = 'cancelled';
-                label = 'Cancelación de OT';
-                break;
+        if (confirmAction.action === 'close') {
+            if (!validateClosing()) {
+                setConfirmAction({ isOpen: false, action: null });
+                return;
+            }
         }
         
-        // In a real app, we would save the techReport here too
-        onStatusChange(o.id, status, label, `Acción ejecutada desde panel.`);
+        let status: WorkOrderStatus = 'in_progress'; // default
+        let label = '';
+        let closedAt = undefined;
+        
+        switch (confirmAction.action) {
+            case 'hold': status = 'on_hold'; label = 'Pendiente Refacciones'; break;
+            case 'close': status = 'closed'; label = 'Cierre de OT'; closedAt = new Date().toISOString(); break;
+            case 'cancel': status = 'cancelled'; label = 'Cancelación de OT'; closedAt = new Date().toISOString(); break;
+        }
+        
+        // Save the tech report to the order object in the parent state
+        const updatedOrder = { ...o, technicalReport: techReport };
+        
+        onStatusChange(o.id, status, label, `Acción ejecutada desde panel.`, closedAt);
         setConfirmAction({ isOpen: false, action: null });
         if (status === 'closed' || status === 'cancelled') onClose();
     };
 
-    const openAIContext = () => {
-        alert("Abriendo Asistente IA con contexto de:\n" + o.machineName + "\nFalla: " + o.description);
-        // In real impl, this would navigate or open overlay
+    const handleTechnicalConsultation = () => {
+        if (isClosed) return;
+        setIsConsulting(true);
+        // Simulate advanced AI processing of documents + live input
+        setTimeout(() => {
+            const result = {
+                problem: `Basado en la lectura de "${techReport.measurements}" y la observación "${techReport.observations}", el manual del fabricante para ${o.machineName} indica una posible desalineación del eje principal o desgaste en el rodamiento frontal.`,
+                repair: `1. Bloquear energía (LOTO). 2. Desmontar cubierta frontal. 3. Verificar holgura con galgas. 4. Si >0.5mm, reemplazar rodamiento SKF-6205.`,
+                precautions: `ATENCIÓN: El eje puede conservar temperatura >80°C. Utilizar guantes térmicos. Verificar torque de 45Nm al cerrar.`
+            };
+            setGeneratedDiagnosis(result);
+            setIsConsulting(false);
+        }, 2000);
     };
 
     return (
-        <div className="fixed inset-y-0 right-0 w-full md:w-[550px] bg-white shadow-2xl z-40 flex flex-col animate-slide-in">
-            {/* Header */}
-            <div className="p-4 border-b border-gray-200 bg-gray-50 flex justify-between items-start">
+        <div className="fixed inset-y-0 right-0 w-full md:w-[600px] bg-white shadow-2xl z-40 flex flex-col animate-slide-in font-sans">
+            
+            {/* 1. COMPACT HEADER */}
+            <div className="px-5 py-4 border-b border-gray-200 bg-gray-50 flex justify-between items-start shrink-0">
                 <div>
-                    <h2 className="text-xl font-bold text-gray-900 flex items-center gap-2">
-                        {o.otNumber}
+                    <div className="flex items-center gap-2 mb-1">
+                        <span className="text-lg font-black text-gray-900">{o.otNumber}</span>
                         {getStatusBadge(o.status)}
-                    </h2>
-                    <p className="text-sm text-gray-600 mt-1">{o.machineName}</p>
-                </div>
-                <button onClick={onClose} className="p-1 hover:bg-gray-200 rounded text-gray-500"><XIcon /></button>
-            </div>
-
-            {/* Tabs */}
-            <div className="flex border-b border-gray-200 bg-white sticky top-0 z-10">
-                <button 
-                    onClick={() => setTab('form')}
-                    className={`flex-1 py-3 text-sm font-bold border-b-2 transition-colors ${tab === 'form' ? 'border-blue-600 text-blue-600 bg-blue-50' : 'border-transparent text-gray-500 hover:text-gray-800'}`}
-                >
-                    Formulario OT
-                </button>
-                <button 
-                    onClick={() => setTab('tracking')}
-                    className={`flex-1 py-3 text-sm font-bold border-b-2 transition-colors ${tab === 'tracking' ? 'border-blue-600 text-blue-600 bg-blue-50' : 'border-transparent text-gray-500 hover:text-gray-800'}`}
-                >
-                    Historial y Tiempos
-                </button>
-            </div>
-
-            {/* Content */}
-            <div className="flex-1 overflow-y-auto p-5 bg-gray-50">
-                {tab === 'form' && (
-                    <div className="space-y-6 pb-20">
-                        {/* 1. Summary Info */}
-                        <div className="bg-white p-4 rounded-lg border border-gray-200 shadow-sm">
-                             <div className="flex justify-between items-center mb-3">
-                                <h4 className="text-xs font-bold text-gray-400 uppercase">Datos Generales</h4>
-                                {o.status === 'unassigned' && (
-                                    <button onClick={() => onAssign(o.id)} className="px-2 py-1 bg-blue-600 text-white text-xs font-bold rounded hover:bg-blue-700">Asignar Ahora</button>
-                                )}
-                            </div>
-                             <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
-                                <div><span className="font-semibold text-gray-600">Responsable:</span> <span className='text-gray-800'>{o.assignedTo || 'Sin asignar'}</span></div>
-                                <div><span className="font-semibold text-gray-600">Turno:</span> <span className='text-gray-800'>{o.shift}</span></div>
-                                <div><span className="font-semibold text-gray-600">Prioridad IA:</span> {getPriorityBadge(o.aiData?.priority || 'P3')}</div>
-                                <div><span className="font-semibold text-gray-600">Estado Maq:</span> {getMachineStatusBadge(o.machineStatus)}</div>
-                             </div>
+                        {getPriorityBadge(o.aiData?.priority || 'P3')}
+                    </div>
+                    <div className="flex flex-col text-xs text-gray-500">
+                        <div className="flex items-center gap-2">
+                            <span className="font-bold text-gray-700">{o.machineName}</span>
+                            <span className="px-1">•</span>
+                            <span>{o.plantName}</span>
                         </div>
-
-                        {/* 2. Report Description & AI Diagnosis */}
-                        <div className="bg-white p-4 rounded-lg border border-gray-200 shadow-sm">
-                            <h4 className="text-xs font-bold text-gray-400 uppercase mb-2">Descripción del Reporte</h4>
-                            <p className="text-sm text-gray-800 mb-4 leading-relaxed bg-gray-50 p-2 rounded border border-gray-100">{o.description}</p>
-                            
-                            {/* Integrated AI Diagnosis */}
-                            {o.aiData && (
-                                <div className="mt-4 border-t border-indigo-100 pt-4">
-                                    <div className="flex items-center gap-2 mb-3 text-indigo-700 font-bold">
-                                        <AIAssistantIcon className="w-5 h-5" />
-                                        PRE-DIAGNÓSTICO IA
-                                    </div>
-                                    <div className="bg-indigo-50 p-3 rounded-md border border-indigo-100 space-y-3">
-                                        <div>
-                                            <span className="text-xs font-bold text-indigo-800">Clasificación:</span>
-                                            <span className="ml-2 text-sm text-gray-800">{o.aiData.classification}</span>
-                                        </div>
-                                        <div>
-                                            <span className="text-xs font-bold text-indigo-800 block mb-1">Instrucciones al Operador:</span>
-                                            <p className="text-sm text-gray-700 bg-white p-2 rounded border border-indigo-100">{o.aiData.operatorInstructions}</p>
-                                        </div>
-                                        <div>
-                                            <span className="text-xs font-bold text-indigo-800 block mb-1">Posibles Causas Raíz:</span>
-                                            <ul className="list-disc pl-5 text-sm text-gray-700">
-                                                {o.aiData.rootCauses.map((rc, i) => <li key={i}>{rc.cause} ({rc.probability})</li>)}
-                                            </ul>
-                                        </div>
-                                    </div>
-                                </div>
-                            )}
-                        </div>
-
-                        {/* 3. Technical Follow-up Form */}
-                        <div className="bg-white p-4 rounded-lg border border-blue-200 shadow-sm ring-1 ring-blue-100">
-                            <h4 className="text-sm font-bold text-blue-800 uppercase mb-4 flex items-center gap-2">
-                                <WrenchScrewdriverIcon className="w-4 h-4"/> Seguimiento Técnico
-                            </h4>
-                            
-                            <DictationInput label="Inspecciones realizadas" value={techReport.inspections} onChange={(e: any) => setTechReport({...techReport, inspections: e.target.value})} multiline />
-                            <DictationInput label="Medidas / lecturas clave tomadas" value={techReport.measurements} onChange={(e: any) => setTechReport({...techReport, measurements: e.target.value})} multiline />
-                            
-                            <button 
-                                onClick={openAIContext}
-                                className="w-full flex items-center justify-center gap-2 bg-gradient-to-r from-indigo-600 to-purple-600 text-white py-2 rounded-lg font-bold text-sm shadow hover:shadow-md transition-all mb-4"
-                            >
-                                <AIAssistantIcon className="w-5 h-5" /> Consulta Técnica IA
-                            </button>
-
-                            <DictationInput label="Diagnóstico Técnico" value={techReport.diagnosis} onChange={(e: any) => setTechReport({...techReport, diagnosis: e.target.value})} multiline />
-                            
-                            <div className="mb-4">
-                                <label className="block text-xs font-bold text-gray-700 mb-2">¿Coincidencia entre diagnóstico IA y técnico?</label>
-                                <div className="flex gap-4">
-                                    <label className="flex items-center gap-2 text-sm cursor-pointer">
-                                        <input type="radio" name="aiMatch" checked={techReport.aiMatch === 'yes'} onChange={() => setTechReport({...techReport, aiMatch: 'yes'})} className="text-blue-600"/> Sí
-                                    </label>
-                                    <label className="flex items-center gap-2 text-sm cursor-pointer">
-                                        <input type="radio" name="aiMatch" checked={techReport.aiMatch === 'no'} onChange={() => setTechReport({...techReport, aiMatch: 'no'})} className="text-blue-600"/> No
-                                    </label>
-                                </div>
-                            </div>
-
-                            <DictationInput label="Causa raíz técnica confirmada" value={techReport.rootCause} onChange={(e: any) => setTechReport({...techReport, rootCause: e.target.value})} multiline />
-                            
-                            <div className="mb-4">
-                                <label className="block text-xs font-bold text-gray-700 mb-2">Tipo de acción ejecutada</label>
-                                <div className="grid grid-cols-2 gap-2">
-                                    {actionOptions.map(opt => (
-                                        <label key={opt} className="flex items-start gap-2 text-xs text-gray-700 cursor-pointer">
-                                            <input 
-                                                type="checkbox" 
-                                                checked={techReport.actions.includes(opt)} 
-                                                onChange={() => handleCheckboxChange(opt)}
-                                                className="mt-0.5 rounded text-blue-600"
-                                            />
-                                            {opt}
-                                        </label>
-                                    ))}
-                                </div>
-                                {techReport.actions.includes('Otro') && (
-                                    <input 
-                                        type="text" 
-                                        placeholder="Especifique otra acción..." 
-                                        className="w-full mt-2 p-2 bg-white border border-gray-300 rounded text-sm"
-                                        value={techReport.otherActionDetail}
-                                        onChange={e => setTechReport({...techReport, otherActionDetail: e.target.value})}
-                                    />
-                                )}
-                            </div>
-
-                            <DictationInput label="Insumos Utilizados" value={techReport.supplies} onChange={(e: any) => setTechReport({...techReport, supplies: e.target.value})} multiline />
-                            <DictationInput label="Medidas preventivas" value={techReport.preventiveMeasures} onChange={(e: any) => setTechReport({...techReport, preventiveMeasures: e.target.value})} multiline />
+                        <div className="flex items-center gap-2 mt-1">
+                            <ClockIcon className="w-3 h-3 text-blue-500" />
+                            <span className={`font-mono font-bold ${isClosed ? 'text-gray-600' : 'text-blue-600 animate-pulse'}`}>
+                                {timerDisplay}
+                            </span>
+                            <span className="text-gray-400 font-medium">acumulado</span>
                         </div>
                     </div>
+                </div>
+                <div className="flex gap-2">
+                    {o.status === 'unassigned' && !isClosed && (
+                        <button onClick={() => onAssign(o.id)} className="px-3 py-1.5 bg-blue-600 text-white text-xs font-bold rounded hover:bg-blue-700 transition-colors shadow-sm">
+                            Asignar
+                        </button>
+                    )}
+                    <button onClick={onClose} className="p-1.5 hover:bg-gray-200 rounded-full text-gray-500 transition-colors"><XIcon /></button>
+                </div>
+            </div>
+
+            {/* 2. TABS */}
+            <div className="flex border-b border-gray-200 bg-white sticky top-0 z-10 shrink-0 px-2">
+                <button onClick={() => setTab('form')} className={`flex-1 py-3 text-xs font-bold uppercase tracking-wider border-b-2 transition-colors ${tab === 'form' ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}>
+                    Gestión & Diagnóstico
+                </button>
+                <button onClick={() => setTab('tracking')} className={`flex-1 py-3 text-xs font-bold uppercase tracking-wider border-b-2 transition-colors ${tab === 'tracking' ? 'border-blue-600 text-blue-600' : 'border-transparent text-gray-400 hover:text-gray-600'}`}>
+                    Historial & Tiempos
+                </button>
+            </div>
+
+            {/* 3. SCROLLABLE CONTENT */}
+            <div className="flex-1 overflow-y-auto p-5 bg-gray-100 space-y-4 custom-scrollbar">
+                {tab === 'form' && (
+                    <>
+                        {/* CARD: SUMMARY DATA */}
+                        <div className="bg-white rounded-lg border border-gray-200 shadow-sm overflow-hidden">
+                            <div className="bg-gray-50 px-4 py-2 border-b border-gray-200 flex justify-between items-center">
+                                <h4 className="text-[10px] font-bold text-gray-500 uppercase tracking-wider">Datos del Reporte</h4>
+                                <span className="text-[10px] text-gray-400">{new Date(o.reportDate).toLocaleString()}</span>
+                            </div>
+                            <div className="p-4 grid grid-cols-1 sm:grid-cols-3 gap-y-3 gap-x-4">
+                                <DetailField label="Solicitante" value={o.detectorName} />
+                                <DetailField label="Tipo Solicitud" value={o.requestType} />
+                                <DetailField label="Turno" value={o.shift} />
+                                
+                                <DetailField label="Estado Máquina" value={getMachineStatusBadge(o.machineStatus)} />
+                                <DetailField label="Responsable" value={o.assignedTo} highlight />
+                                <DetailField label="Riesgo Seguridad" value={o.safetyRisk} alert={o.safetyRisk === 'Riesgo alto'} />
+                            </div>
+                        </div>
+
+                        {/* CARD: PROBLEM DETAIL */}
+                        <div className="bg-white rounded-lg border border-gray-200 shadow-sm overflow-hidden">
+                            <div className="bg-gray-50 px-4 py-2 border-b border-gray-200">
+                                <h4 className="text-[10px] font-bold text-gray-500 uppercase tracking-wider">Detalle de la Falla</h4>
+                            </div>
+                            <div className="p-4 space-y-4">
+                                <div>
+                                    <p className="text-xs text-gray-800 italic bg-gray-50 p-2 rounded border border-gray-100 mb-2">"{o.description}"</p>
+                                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                        <DetailField label="Síntomas" value={o.symptoms?.join(', ')} />
+                                        <DetailField label="Alarmas" value={`${o.alarmCodes || ''} ${o.alarmMessages || ''}`} />
+                                    </div>
+                                </div>
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2 border-t border-gray-100">
+                                    <DetailField label="Desde Cuándo" value={o.sinceWhen} />
+                                    <DetailField label="Frecuencia" value={o.frequency} />
+                                </div>
+                                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2 border-t border-gray-100 bg-orange-50/30 -mx-4 px-4 py-2">
+                                    <DetailField label="Ajustes Recientes" value={o.recentAdjustments === 'yes' ? o.adjustmentsDetail : 'No'} highlight={o.recentAdjustments === 'yes'} />
+                                    <DetailField label="Impacto en Producción" value={o.impactProduction} />
+                                    <DetailField label="Impacto en Calidad" value={o.impactQuality === 'yes' ? o.defectDescription : 'No'} alert={o.impactQuality === 'yes'} />
+                                </div>
+                                {o.evidenceFiles && o.evidenceFiles.length > 0 && (
+                                    <div className="flex gap-2 overflow-x-auto pt-2">
+                                        {o.evidenceFiles.map((file, i) => (
+                                            <div 
+                                                key={i} 
+                                                className="w-16 h-16 bg-gray-200 rounded border border-gray-300 flex items-center justify-center shrink-0 cursor-pointer hover:border-blue-500 relative group"
+                                                onClick={() => setViewerUrl(file)}
+                                            >
+                                                <img src={file} alt="evidence" className="w-full h-full object-cover rounded" />
+                                                <div className="absolute inset-0 bg-black/40 hidden group-hover:flex items-center justify-center text-[9px] text-white font-bold rounded">Ver</div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+
+                        {/* SECTION 1: SEGUIMIENTO TÉCNICO & CONSULTA IA */}
+                        <div className="bg-white rounded-lg border border-blue-200 shadow-md ring-1 ring-blue-50 overflow-hidden">
+                            <div className="bg-blue-50 px-4 py-2 border-b border-blue-200 flex justify-between items-center">
+                                <h4 className="text-xs font-bold text-blue-800 uppercase tracking-wider flex items-center gap-2">
+                                    <SignalIcon className="w-4 h-4"/> Seguimiento Técnico
+                                </h4>
+                            </div>
+                            <div className="p-4 space-y-4">
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                                    <DictationInput disabled={isClosed} label="Inspecciones Realizadas" value={techReport.inspections} onChange={(e: any) => setTechReport({...techReport, inspections: e.target.value})} multiline />
+                                    <DictationInput disabled={isClosed} label="Medidas / Lecturas Clave" value={techReport.measurements} onChange={(e: any) => setTechReport({...techReport, measurements: e.target.value})} multiline />
+                                </div>
+                                <DictationInput disabled={isClosed} label="Observaciones Adicionales" value={techReport.observations} onChange={(e: any) => setTechReport({...techReport, observations: e.target.value})} multiline />
+                                
+                                {/* AI CONSULTATION BUTTON */}
+                                <button 
+                                    onClick={handleTechnicalConsultation}
+                                    disabled={isConsulting || isClosed}
+                                    className="w-full flex items-center justify-center gap-2 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white py-2.5 rounded-lg font-bold text-xs shadow hover:shadow-md transition-all disabled:opacity-70 disabled:cursor-not-allowed"
+                                >
+                                    {isConsulting ? (
+                                        <>
+                                            <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                                            Consultando Documentación...
+                                        </>
+                                    ) : (
+                                        <>
+                                            <AIAssistantIcon className="w-4 h-4" />
+                                            Consulta Técnica IA (Docs & Contexto)
+                                        </>
+                                    )}
+                                </button>
+
+                                {/* GENERATED DIAGNOSIS RESULT */}
+                                {generatedDiagnosis && (
+                                    <div className="mt-4 bg-indigo-50 border border-indigo-200 rounded-lg p-3 animate-fade-in">
+                                        <div className="flex items-center gap-2 mb-2 pb-2 border-b border-indigo-100">
+                                            <CodeBracketIcon className="w-4 h-4 text-indigo-600"/>
+                                            <span className="text-xs font-bold text-indigo-800 uppercase">Nuevo Pre-Diagnóstico (Documentado)</span>
+                                        </div>
+                                        <div className="space-y-3 text-xs text-indigo-900">
+                                            <div>
+                                                <span className="font-bold block text-indigo-700">Problema Identificado:</span>
+                                                {generatedDiagnosis.problem}
+                                            </div>
+                                            <div>
+                                                <span className="font-bold block text-indigo-700">Procedimiento Reparación:</span>
+                                                {generatedDiagnosis.repair}
+                                            </div>
+                                            <div className="bg-indigo-100 p-2 rounded text-indigo-800 italic border border-indigo-200">
+                                                <span className="font-bold">Precaución:</span> {generatedDiagnosis.precautions}
+                                            </div>
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+
+                        {/* SECTION 2: RESOLUCIÓN DE OT */}
+                        <div className="bg-white rounded-lg border border-green-200 shadow-md ring-1 ring-green-50 overflow-hidden">
+                            <div className="bg-green-50 px-4 py-2 border-b border-green-200 flex justify-between items-center">
+                                <h4 className="text-xs font-bold text-green-800 uppercase tracking-wider flex items-center gap-2">
+                                    <WrenchScrewdriverIcon className="w-4 h-4"/> Resolución de OT
+                                </h4>
+                            </div>
+                            <div className="p-4 space-y-4">
+                                <DictationInput disabled={isClosed} label="Diagnóstico Técnico Final" value={techReport.diagnosis} onChange={(e: any) => setTechReport({...techReport, diagnosis: e.target.value})} multiline />
+                                
+                                <div className="bg-gray-50 p-2 rounded border border-gray-200">
+                                    <label className="block text-[10px] font-bold text-gray-500 uppercase mb-2">Acciones Ejecutadas</label>
+                                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                                        {actionOptions.map(opt => (
+                                            <label key={opt} className={`flex items-center gap-2 text-xs text-gray-700 cursor-pointer hover:bg-gray-100 rounded px-1 ${isClosed ? 'pointer-events-none opacity-70' : ''}`}>
+                                                <input 
+                                                    type="checkbox" 
+                                                    checked={techReport.actions.includes(opt)} 
+                                                    onChange={() => handleCheckboxChange(opt)}
+                                                    disabled={isClosed}
+                                                    className="w-3 h-3 text-blue-600 rounded"
+                                                />
+                                                {opt}
+                                            </label>
+                                        ))}
+                                    </div>
+                                    {techReport.actions.includes('Otro') && (
+                                        <input 
+                                            type="text" 
+                                            placeholder="Especifique..." 
+                                            className="w-full mt-2 p-1.5 text-xs border border-gray-300 rounded bg-white"
+                                            value={techReport.otherActionDetail}
+                                            onChange={e => setTechReport({...techReport, otherActionDetail: e.target.value})}
+                                            disabled={isClosed}
+                                        />
+                                    )}
+                                </div>
+
+                                <div className="space-y-2">
+                                    <div className="flex justify-between items-center">
+                                        <label className="text-[10px] font-bold text-gray-500 uppercase">Insumos Utilizados</label>
+                                        {!isClosed && (
+                                            <button onClick={handleAddSupply} className="text-xs bg-blue-50 text-blue-600 px-2 py-1 rounded border border-blue-100 hover:bg-blue-100 font-semibold">+ Agregar Insumo</button>
+                                        )}
+                                    </div>
+                                    <div className="space-y-2">
+                                        {techReport.supplies.map(supply => (
+                                            <div key={supply.id} className="flex gap-2 items-center">
+                                                <input 
+                                                    type="text" 
+                                                    placeholder="Descripción (Ej. Sensor)" 
+                                                    value={supply.description} 
+                                                    onChange={(e) => handleUpdateSupply(supply.id, 'description', e.target.value)}
+                                                    className="flex-1 p-1.5 border border-gray-300 rounded text-xs focus:ring-1 focus:ring-blue-500 focus:outline-none bg-white text-gray-900 disabled:bg-gray-100"
+                                                    disabled={isClosed}
+                                                />
+                                                <input 
+                                                    type="text" 
+                                                    placeholder="Cant." 
+                                                    value={supply.quantity} 
+                                                    onChange={(e) => handleUpdateSupply(supply.id, 'quantity', e.target.value)}
+                                                    className="w-16 p-1.5 border border-gray-300 rounded text-xs text-center focus:ring-1 focus:ring-blue-500 focus:outline-none bg-white text-gray-900 disabled:bg-gray-100"
+                                                    disabled={isClosed}
+                                                />
+                                                {!isClosed && (
+                                                    <button onClick={() => handleRemoveSupply(supply.id)} className="text-gray-400 hover:text-red-500 transition-colors"><TrashIcon className="w-4 h-4"/></button>
+                                                )}
+                                            </div>
+                                        ))}
+                                        {techReport.supplies.length === 0 && <p className="text-xs text-gray-400 italic text-center py-2 bg-gray-50 rounded border border-dashed border-gray-200">No se han registrado insumos.</p>}
+                                    </div>
+                                </div>
+
+                                <div className="mt-4">
+                                    <DictationInput disabled={isClosed} label="Causa Raíz Confirmada" value={techReport.rootCause} onChange={(e: any) => setTechReport({...techReport, rootCause: e.target.value})} multiline />
+                                </div>
+                                <DictationInput disabled={isClosed} label="Medidas Preventivas" value={techReport.preventiveMeasures} onChange={(e: any) => setTechReport({...techReport, preventiveMeasures: e.target.value})} multiline />
+
+                                <div className="flex items-center gap-4 text-xs text-gray-600 bg-gray-50 p-2 rounded border border-gray-200">
+                                    <span className="font-bold">¿Coincidió con IA?</span>
+                                    <label className={`flex items-center gap-1 cursor-pointer ${isClosed ? 'pointer-events-none opacity-70' : ''}`}><input type="radio" name="aiMatch" checked={techReport.aiMatch === 'yes'} onChange={() => setTechReport({...techReport, aiMatch: 'yes'})} disabled={isClosed}/> Sí</label>
+                                    <label className={`flex items-center gap-1 cursor-pointer ${isClosed ? 'pointer-events-none opacity-70' : ''}`}><input type="radio" name="aiMatch" checked={techReport.aiMatch === 'no'} onChange={() => setTechReport({...techReport, aiMatch: 'no'})} disabled={isClosed}/> No</label>
+                                </div>
+                            </div>
+                        </div>
+                    </>
                 )}
 
                 {tab === 'tracking' && (
-                    <div className="space-y-6">
-                        <div className="flex items-center justify-between text-sm bg-white p-3 rounded border border-gray-200">
-                            <span className="text-gray-500">Tiempo Transcurrido</span>
-                            <span className="font-mono font-bold text-lg text-gray-800">{calculateTimeElapsed(o.reportDate)}</span>
+                    <div className="space-y-4">
+                        <div className="bg-white p-4 rounded-lg border border-gray-200 shadow-sm flex items-center justify-between">
+                            <div>
+                                <p className="text-[10px] font-bold text-gray-400 uppercase">Tiempo Transcurrido</p>
+                                <p className="text-2xl font-mono font-bold text-gray-800">{timerDisplay}</p>
+                            </div>
+                            <div className="text-right">
+                                <p className="text-[10px] font-bold text-gray-400 uppercase">Inicio Reporte</p>
+                                <p className="text-sm font-medium text-gray-600">{new Date(o.reportDate).toLocaleString()}</p>
+                                {o.closedAt && (
+                                    <>
+                                        <p className="text-[10px] font-bold text-gray-400 uppercase mt-2">Cierre Reporte</p>
+                                        <p className="text-sm font-medium text-gray-600">{new Date(o.closedAt).toLocaleString()}</p>
+                                    </>
+                                )}
+                            </div>
                         </div>
-                        <div className="relative border-l-2 border-gray-200 ml-3 space-y-6 pl-6 pb-2">
-                            {o.logs.map((log, idx) => (
-                                <div key={idx} className="relative">
-                                    <div className="absolute -left-[31px] top-0 w-4 h-4 rounded-full bg-white border-2 border-blue-500"></div>
-                                    <p className="text-xs text-gray-400 mb-0.5">{new Date(log.date).toLocaleString()}</p>
-                                    <p className="text-sm font-bold text-gray-800">{log.action}</p>
-                                    <p className="text-xs text-gray-600">{log.user}</p>
-                                    {log.comment && <p className="mt-1 text-xs bg-yellow-50 text-yellow-800 p-2 rounded border border-yellow-100 italic">"{log.comment}"</p>}
-                                </div>
-                            ))}
+                        
+                        <div className="bg-white p-4 rounded-lg border border-gray-200 shadow-sm">
+                            <h4 className="text-xs font-bold text-gray-500 uppercase mb-4">Bitácora de Eventos</h4>
+                            <div className="relative border-l-2 border-gray-200 ml-2 space-y-6 pl-6 pb-2">
+                                {o.logs.map((log, idx) => (
+                                    <div key={idx} className="relative group">
+                                        <div className="absolute -left-[29px] top-1 w-3 h-3 rounded-full bg-white border-2 border-blue-50 group-hover:bg-blue-500 transition-colors"></div>
+                                        <div className="flex justify-between items-start">
+                                            <p className="text-sm font-bold text-gray-800">{log.action}</p>
+                                            <p className="text-xs text-gray-400">{new Date(log.date).toLocaleString()}</p>
+                                        </div>
+                                        <p className="text-xs text-gray-600 mb-1 flex items-center gap-1"><UserIcon className="w-3 h-3"/> {log.user}</p>
+                                        {log.comment && <p className="text-xs bg-yellow-50 text-yellow-800 p-2 rounded border border-yellow-100 italic">"{log.comment}"</p>}
+                                    </div>
+                                ))}
+                            </div>
                         </div>
                     </div>
                 )}
             </div>
 
-            {/* Bottom Action Bar */}
-            <div className="p-4 border-t border-gray-200 bg-white shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.05)] flex justify-end gap-2 z-20">
+            {/* 4. FOOTER ACTIONS */}
+            <div className="p-4 bg-white border-t border-gray-200 shrink-0 flex justify-end gap-2 shadow-[0_-4px_6px_-1px_rgba(0,0,0,0.05)] z-20">
                 <button 
+                    disabled={isClosed}
                     onClick={() => setConfirmAction({ isOpen: true, action: 'hold' })}
-                    className="px-4 py-2 bg-orange-100 text-orange-700 hover:bg-orange-200 rounded-lg font-bold text-xs transition-colors"
+                    className="px-4 py-2 bg-orange-50 text-orange-700 hover:bg-orange-100 border border-orange-200 rounded-lg font-bold text-xs transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                    Pendiente Refacciones
+                    Pausar (Refacciones)
                 </button>
                 <button 
+                    disabled={isClosed}
                     onClick={() => setConfirmAction({ isOpen: true, action: 'cancel' })}
-                    className="px-4 py-2 bg-red-100 text-red-700 hover:bg-red-200 rounded-lg font-bold text-xs transition-colors"
+                    className="px-4 py-2 bg-red-50 text-red-700 hover:bg-red-100 border border-red-200 rounded-lg font-bold text-xs transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                     Cancelar
                 </button>
                 <button 
+                    disabled={isClosed}
                     onClick={() => setConfirmAction({ isOpen: true, action: 'close' })}
-                    className="px-6 py-2 bg-green-600 text-white hover:bg-green-700 rounded-lg font-bold text-xs transition-colors shadow-md"
+                    className="px-6 py-2 bg-green-600 text-white hover:bg-green-700 rounded-lg font-bold text-xs transition-colors shadow-md flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                    Cerrar OT
+                    <CheckCircleIcon className="w-4 h-4"/> Cerrar Orden
                 </button>
             </div>
 
@@ -430,591 +717,53 @@ const SidePanel: React.FC<SidePanelProps> = ({ selectedOrder, orders, onClose, o
                 onCancel={() => setConfirmAction({ isOpen: false, action: null })}
                 confirmColor={confirmAction.action === 'close' ? 'bg-green-600' : confirmAction.action === 'hold' ? 'bg-orange-500' : 'bg-red-600'}
             />
+
+            {/* Image Viewer */}
+            <ImageViewerModal 
+                isOpen={!!viewerUrl} 
+                url={viewerUrl} 
+                onClose={() => setViewerUrl(null)} 
+            />
         </div>
     );
 };
-
-// --- CREATE WORK ORDER MODAL (Restored Full Functionality) ---
-
-interface CreateWorkOrderState {
-    // 1. Encabezado
-    otNumber: string;
-    reportDate: string;
-    userId: string;
-    detectorName: string;
-    shift: string;
-    requestType: string;
-
-    // 2. Maquina
-    plantId: string;
-    processId: string;
-    subprocessId: string;
-    machineId: string;
-    machineCode: string;
-    machineName: string;
-    operatingHours: string;
-
-    // 3. Estado Actual
-    currentStatus: string; // Machine Status
-    safetyRisk: string;
-    failureMoment: string;
-
-    // 4. Descripción
-    failureDescription: string;
-    symptoms: string[];
-    otherSymptomDetail: string;
-    alarmCodes: string;
-    alarmMessages: string;
-    sinceWhen: string;
-    frequency: string;
-
-    // 5. Condiciones Operación
-    productModel: string;
-    recentAdjustments: string; // "yes" | "no"
-    adjustmentsDetail: string;
-
-    // 6. Impacto
-    productionImpact: string;
-    qualityImpact: string; // "yes" | "no"
-    defectType: string;
-    defectDescription: string;
-
-    // 7. Evidencia
-    files: FileList | null;
-}
-
-interface CreateWorkOrderModalProps {
-    isOpen: boolean;
-    onClose: () => void;
-    plants: Plant[];
-    onSave: (data: any) => void;
-}
-
-const CreateWorkOrderModal: React.FC<CreateWorkOrderModalProps> = ({ isOpen, onClose, plants, onSave }) => {
-    const [formData, setFormData] = useState<CreateWorkOrderState>({
-        otNumber: `OT-${Math.floor(100000 + Math.random() * 900000)}`,
-        reportDate: new Date().toLocaleString(),
-        userId: 'Ana Lopez', // Mock current user
-        detectorName: '',
-        shift: '',
-        requestType: '',
-        plantId: '', processId: '', subprocessId: '', machineId: '', machineCode: '', machineName: '', operatingHours: '',
-        currentStatus: '', safetyRisk: '', failureMoment: '',
-        failureDescription: '', symptoms: [], otherSymptomDetail: '', alarmCodes: '', alarmMessages: '', sinceWhen: '', frequency: '',
-        productModel: '', recentAdjustments: '', adjustmentsDetail: '',
-        productionImpact: '', qualityImpact: '', defectType: '', defectDescription: '',
-        files: null
-    });
-
-    const [aiDiagnosis, setAiDiagnosis] = useState<any>(null);
-    const [isSimulatingAI, setIsSimulatingAI] = useState(false);
-
-    // Cascading Logic Helpers
-    const selectedPlant = plants.find(p => p.id === formData.plantId);
-    const selectedProcess = selectedPlant?.processes.find(p => p.id === formData.processId);
-    const selectedSubprocess = selectedProcess?.subprocesses.find(s => s.id === formData.subprocessId);
-    const availableMachines = selectedSubprocess?.machines || selectedProcess?.machines || selectedPlant?.machines || [];
-
-    const handleChange = (field: keyof CreateWorkOrderState, value: any) => {
-        setFormData(prev => {
-            const updates: any = { [field]: value };
-            
-            // Reset downstream selections if upstream changes
-            if (field === 'plantId') {
-                updates.processId = ''; updates.subprocessId = ''; updates.machineId = ''; updates.machineCode = ''; updates.machineName = '';
-            }
-            if (field === 'processId') {
-                updates.subprocessId = ''; updates.machineId = ''; updates.machineCode = ''; updates.machineName = '';
-            }
-            if (field === 'subprocessId') {
-                 updates.machineId = ''; updates.machineCode = ''; updates.machineName = '';
-            }
-            // Auto-fill machine info
-            if (field === 'machineId') {
-                const m = availableMachines.find(m => m.id === value);
-                if (m) {
-                    updates.machineCode = m.code;
-                    updates.machineName = m.name;
-                }
-            }
-
-            return { ...prev, ...updates };
-        });
-    };
-
-    const handleSymptomToggle = (symptom: string) => {
-        setFormData(prev => {
-            const exists = prev.symptoms.includes(symptom);
-            return {
-                ...prev,
-                symptoms: exists ? prev.symptoms.filter(s => s !== symptom) : [...prev.symptoms, symptom]
-            };
-        });
-    };
-
-    const simulateAIDiagnosis = () => {
-        // Simple validation
-        if (!formData.plantId || !formData.machineId || !formData.failureDescription) {
-             alert("Por favor complete los campos obligatorios de máquina y falla.");
-             return;
-        }
-
-        setIsSimulatingAI(true);
-        
-        // Simulate API latency
-        setTimeout(() => {
-            // Mock Logic based on inputs
-            const isHighRisk = formData.safetyRisk === 'Riesgo alto' || formData.currentStatus === 'Paro total';
-            const mockResult = {
-                operatorInstructions: "DETENER MÁQUINA INMEDIATAMENTE. No intentar reiniciar. Verificar suministro eléctrico principal.",
-                classification: formData.symptoms.includes('Olor a quemado') ? "Posible Cortocircuito / Sobrecalentamiento Motor" : "Falla Mecánica General",
-                priority: isHighRisk ? "P1" : "P2",
-                riskLevel: isHighRisk ? "Alto" : "Medio",
-                rootCauses: [
-                    { cause: "Desgaste prematuro de componentes", probability: "85%" },
-                    { cause: "Falla en sensor de posición", probability: "60%" },
-                    { cause: "Error de operación / sobrecarga", probability: "40%" }
-                ],
-                suggestedActions: [
-                    "Verificar voltajes de entrada",
-                    "Inspeccionar visualmente cableado",
-                    "Revisar logs de error en HMI"
-                ]
-            };
-            setAiDiagnosis(mockResult);
-            setIsSimulatingAI(false);
-            // Simulate notification
-            alert(`Notificación enviada a: ${formData.userId} (Email/WhatsApp) con estatus: Enviado`);
-        }, 2500);
-    };
-
-    const handleFinalSave = () => {
-        onSave({ ...formData, aiDiagnosis });
-        onClose();
-    };
-
-    if (!isOpen) return null;
-
-    // --- RENDER AI RESULT VIEW ---
-    if (aiDiagnosis) {
-        return (
-            <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[70] flex items-center justify-center animate-fade-in">
-                <div className="bg-white w-full max-w-2xl rounded-xl shadow-2xl overflow-hidden flex flex-col max-h-[90vh]">
-                    <div className="bg-gradient-to-r from-indigo-600 to-blue-600 p-4 flex items-center gap-3 text-white">
-                         <AIAssistantIcon className="w-8 h-8"/>
-                         <div>
-                             <h3 className="font-bold text-lg">PRE-DIAGNÓSTICO GENERADO POR IA</h3>
-                             <p className="text-blue-100 text-xs">Análisis basado en historial y síntomas reportados</p>
-                         </div>
-                    </div>
-                    <div className="p-6 overflow-y-auto flex-1 space-y-6">
-                         <div className="bg-blue-50 border border-blue-100 p-4 rounded-lg">
-                             <h4 className="text-sm font-bold text-blue-800 mb-2">Instrucciones al Operador</h4>
-                             <p className="text-gray-800 text-base font-medium">{aiDiagnosis.operatorInstructions}</p>
-                         </div>
-
-                         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                             <div className="bg-gray-50 p-3 rounded border border-gray-200">
-                                 <p className="text-xs text-gray-500 uppercase font-bold">Clasificación</p>
-                                 <p className="font-bold text-indigo-700">{aiDiagnosis.classification}</p>
-                             </div>
-                             <div className="bg-gray-50 p-3 rounded border border-gray-200">
-                                 <p className="text-xs text-gray-500 uppercase font-bold">Prioridad Sugerida</p>
-                                 <p className={`font-bold ${aiDiagnosis.priority === 'P1' ? 'text-red-600' : 'text-yellow-600'}`}>{aiDiagnosis.priority}</p>
-                             </div>
-                             <div className="bg-gray-50 p-3 rounded border border-gray-200">
-                                 <p className="text-xs text-gray-500 uppercase font-bold">Nivel de Riesgo</p>
-                                 <p className={`font-bold ${aiDiagnosis.riskLevel === 'Alto' ? 'text-red-600' : 'text-orange-600'}`}>{aiDiagnosis.riskLevel}</p>
-                             </div>
-                         </div>
-
-                         <div>
-                             <h4 className="text-sm font-bold text-gray-700 mb-2">Probables Causas Raíz</h4>
-                             <ul className="space-y-2">
-                                 {aiDiagnosis.rootCauses.map((rc: any, i: number) => (
-                                     <li key={i} className="flex justify-between items-center bg-white border border-gray-200 p-2 rounded">
-                                         <span className="text-sm text-gray-700">{rc.cause}</span>
-                                         <span className="text-xs font-bold bg-gray-100 px-2 py-1 rounded">{rc.probability}</span>
-                                     </li>
-                                 ))}
-                             </ul>
-                         </div>
-
-                         <div>
-                             <h4 className="text-sm font-bold text-gray-700 mb-2">Acciones Sugeridas</h4>
-                             <ul className="list-disc list-inside text-sm text-gray-600 bg-gray-50 p-3 rounded border border-gray-200">
-                                 {aiDiagnosis.suggestedActions.map((act: string, i: number) => (
-                                     <li key={i}>{act}</li>
-                                 ))}
-                             </ul>
-                         </div>
-                    </div>
-                    <div className="p-4 bg-gray-50 border-t flex justify-end">
-                        <button onClick={handleFinalSave} className="bg-green-600 hover:bg-green-700 text-white px-6 py-2 rounded font-bold shadow-lg transition-transform transform hover:scale-105">
-                            Enterado (Guardar OT)
-                        </button>
-                    </div>
-                </div>
-            </div>
-        );
-    }
-
-    return (
-        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[70] flex items-center justify-center animate-fade-in">
-            <div className="bg-white w-full max-w-4xl rounded-xl shadow-2xl overflow-hidden flex flex-col h-[90vh]">
-                {/* HEADER */}
-                <div className="bg-gray-800 text-white p-4 flex justify-between items-center shrink-0">
-                    <div>
-                        <h3 className="font-bold text-xl">Solicitud de Orden de Trabajo Técnico</h3>
-                        <p className="text-gray-400 text-xs mt-1">Complete la información para iniciar el diagnóstico IA</p>
-                    </div>
-                    <button onClick={onClose} className="text-gray-400 hover:text-white transition-colors"><XIcon className="w-6 h-6"/></button>
-                </div>
-
-                {/* LOADING STATE */}
-                {isSimulatingAI ? (
-                    <div className="flex-1 flex flex-col items-center justify-center bg-white space-y-6">
-                        <div className="relative">
-                            <div className="w-20 h-20 border-4 border-blue-200 border-t-blue-600 rounded-full animate-spin"></div>
-                            <AIAssistantIcon className="w-8 h-8 text-blue-600 absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2"/>
-                        </div>
-                        <div className="text-center">
-                            <h4 className="text-xl font-bold text-gray-800">Analizando Solicitud...</h4>
-                            <p className="text-gray-500 mt-2">Consultando historial de máquina y documentos técnicos</p>
-                        </div>
-                    </div>
-                ) : (
-                    <div className="flex-1 overflow-y-auto p-6 bg-gray-50 space-y-6">
-                        
-                        {/* SECCIÓN 1: ENCABEZADO */}
-                        <section className="bg-white p-4 rounded-lg shadow-sm border border-gray-200">
-                            <h4 className="text-xs font-bold text-blue-600 uppercase mb-4 border-b pb-2">1. Encabezado de la Solicitud</h4>
-                            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                                <div className="space-y-1"><label className="text-xs font-bold text-gray-700">Número OT</label><input disabled value={formData.otNumber} className="w-full bg-gray-100 border border-gray-300 rounded p-2 text-sm text-gray-500"/></div>
-                                <div className="space-y-1"><label className="text-xs font-bold text-gray-700">Fecha Reporte</label><input disabled value={formData.reportDate} className="w-full bg-gray-100 border border-gray-300 rounded p-2 text-sm text-gray-500"/></div>
-                                <div className="space-y-1"><label className="text-xs font-bold text-gray-700">Usuario</label><input disabled value={formData.userId} className="w-full bg-gray-100 border border-gray-300 rounded p-2 text-sm text-gray-500"/></div>
-                                <div className="space-y-1"><label className="text-xs font-bold text-gray-700">Detectó Falla *</label><input value={formData.detectorName} onChange={e => handleChange('detectorName', e.target.value)} className="w-full bg-white border border-gray-300 rounded p-2 text-sm focus:ring-2 focus:ring-blue-500"/></div>
-                                <div className="space-y-1">
-                                    <label className="text-xs font-bold text-gray-700">Turno *</label>
-                                    <select value={formData.shift} onChange={e => handleChange('shift', e.target.value)} className="w-full bg-white border border-gray-300 rounded p-2 text-sm">
-                                        <option value="">Seleccionar...</option>
-                                        <option value="Turno 1">Turno 1</option>
-                                        <option value="Turno 2">Turno 2</option>
-                                        <option value="Turno 3">Turno 3</option>
-                                        <option value="Mixto">Mixto</option>
-                                    </select>
-                                </div>
-                                <div className="space-y-1">
-                                    <label className="text-xs font-bold text-gray-700">Tipo Solicitud *</label>
-                                    <select value={formData.requestType} onChange={e => handleChange('requestType', e.target.value)} className="w-full bg-white border border-gray-300 rounded p-2 text-sm">
-                                        <option value="">Seleccionar...</option>
-                                        <option value="Mantenimiento correctivo">Mantenimiento correctivo</option>
-                                        <option value="Alarma en equipo">Alarma en equipo</option>
-                                        <option value="Comportamiento anómalo">Comportamiento anómalo</option>
-                                        <option value="Duda operación">Duda operación</option>
-                                        <option value="Otro">Otro</option>
-                                    </select>
-                                </div>
-                            </div>
-                        </section>
-
-                        {/* SECCIÓN 2: MAQUINA */}
-                        <section className="bg-white p-4 rounded-lg shadow-sm border border-gray-200">
-                            <h4 className="text-xs font-bold text-blue-600 uppercase mb-4 border-b pb-2">2. Identificación de Máquina y Proceso</h4>
-                            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                                <div className="space-y-1">
-                                    <label className="text-xs font-bold text-gray-700">Planta *</label>
-                                    <select value={formData.plantId} onChange={e => handleChange('plantId', e.target.value)} className="w-full bg-white border border-gray-300 rounded p-2 text-sm">
-                                        <option value="">Seleccionar Planta...</option>
-                                        {plants.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-                                    </select>
-                                </div>
-                                <div className="space-y-1">
-                                    <label className="text-xs font-bold text-gray-700">Proceso *</label>
-                                    <select value={formData.processId} onChange={e => handleChange('processId', e.target.value)} disabled={!formData.plantId} className="w-full bg-white border border-gray-300 rounded p-2 text-sm disabled:bg-gray-100">
-                                        <option value="">Seleccionar Proceso...</option>
-                                        {selectedPlant?.processes.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-                                    </select>
-                                </div>
-                                <div className="space-y-1">
-                                    <label className="text-xs font-bold text-gray-700">Subproceso *</label>
-                                    <select value={formData.subprocessId} onChange={e => handleChange('subprocessId', e.target.value)} disabled={!formData.processId} className="w-full bg-white border border-gray-300 rounded p-2 text-sm disabled:bg-gray-100">
-                                        <option value="">Seleccionar Subproceso...</option>
-                                        {selectedProcess?.subprocesses.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
-                                    </select>
-                                </div>
-                                <div className="space-y-1">
-                                    <label className="text-xs font-bold text-gray-700">Máquina (Código) *</label>
-                                    <select value={formData.machineId} onChange={e => handleChange('machineId', e.target.value)} disabled={!formData.processId} className="w-full bg-white border border-gray-300 rounded p-2 text-sm disabled:bg-gray-100">
-                                        <option value="">Buscar Máquina...</option>
-                                        {availableMachines.map(m => <option key={m.id} value={m.id}>{m.code} - {m.name}</option>)}
-                                    </select>
-                                </div>
-                                <div className="space-y-1">
-                                    <label className="text-xs font-bold text-gray-700">Nombre Descriptivo</label>
-                                    <input disabled value={formData.machineName} className="w-full bg-gray-100 border border-gray-300 rounded p-2 text-sm text-gray-600"/>
-                                </div>
-                                <div className="space-y-1">
-                                    <label className="text-xs font-bold text-gray-700">Horas Operación</label>
-                                    <input type="number" value={formData.operatingHours} onChange={e => handleChange('operatingHours', e.target.value)} placeholder="Ej. 12500" className="w-full bg-white border border-gray-300 rounded p-2 text-sm"/>
-                                </div>
-                            </div>
-                        </section>
-
-                        {/* SECCIÓN 3: ESTADO ACTUAL */}
-                        <section className="bg-white p-4 rounded-lg shadow-sm border border-gray-200">
-                            <h4 className="text-xs font-bold text-blue-600 uppercase mb-4 border-b pb-2">3. Estado Actual de la Máquina</h4>
-                            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                                <div className="space-y-1">
-                                    <label className="text-xs font-bold text-gray-700">Estado *</label>
-                                    <select value={formData.currentStatus} onChange={e => handleChange('currentStatus', e.target.value)} className="w-full bg-white border border-gray-300 rounded p-2 text-sm">
-                                        <option value="">Seleccionar...</option>
-                                        <option value="Paro total">Paro total (No produce)</option>
-                                        <option value="Funciona con falla">Funciona con falla</option>
-                                        <option value="Solo alarma en pantalla">Solo alarma en pantalla</option>
-                                        <option value="Duda de operación">Duda de operación</option>
-                                    </select>
-                                </div>
-                                <div className="space-y-1">
-                                    <label className="text-xs font-bold text-gray-700">Riesgo Seguridad *</label>
-                                    <select value={formData.safetyRisk} onChange={e => handleChange('safetyRisk', e.target.value)} className="w-full bg-white border border-gray-300 rounded p-2 text-sm">
-                                        <option value="">Seleccionar...</option>
-                                        <option value="Ningún riesgo aparente">Ningún riesgo aparente</option>
-                                        <option value="Riesgo potencial">Riesgo potencial</option>
-                                        <option value="Riesgo alto">Riesgo alto</option>
-                                    </select>
-                                </div>
-                                <div className="space-y-1">
-                                    <label className="text-xs font-bold text-gray-700">Momento Falla *</label>
-                                    <select value={formData.failureMoment} onChange={e => handleChange('failureMoment', e.target.value)} className="w-full bg-white border border-gray-300 rounded p-2 text-sm">
-                                        <option value="">Seleccionar...</option>
-                                        <option value="Continua">Continua</option>
-                                        <option value="Intermitente">Intermitente</option>
-                                        <option value="Al arrancar">Al arrancar</option>
-                                        <option value="Operación normal">Operación normal</option>
-                                    </select>
-                                </div>
-                            </div>
-                        </section>
-
-                        {/* SECCIÓN 4: DESCRIPCIÓN */}
-                        <section className="bg-white p-4 rounded-lg shadow-sm border border-gray-200">
-                            <h4 className="text-xs font-bold text-blue-600 uppercase mb-4 border-b pb-2">4. Descripción de la Falla</h4>
-                            <div className="space-y-4">
-                                <div>
-                                    <label className="text-xs font-bold text-gray-700 mb-1 block">Descripción Detallada *</label>
-                                    <div className="relative">
-                                        <textarea value={formData.failureDescription} onChange={e => handleChange('failureDescription', e.target.value)} rows={3} className="w-full bg-white border border-gray-300 rounded p-2 pr-8 text-sm" placeholder="Describa qué sucede..."/>
-                                        <MicrophoneIcon className="absolute right-2 top-2 w-5 h-5 text-gray-400 cursor-pointer hover:text-blue-500"/>
-                                    </div>
-                                </div>
-                                <div>
-                                    <label className="text-xs font-bold text-gray-700 mb-2 block">Síntomas Observados *</label>
-                                    <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-                                        {['Ruidos anormales', 'Vibración excesiva', 'Fugas aceite', 'Fugas agua', 'Fugas aire', 'Temp alta', 'Pérdida presión', 'Piezas fuera medida', 'Paros frecuentes', 'Olor quemado', 'Fallo eléctrico', 'Alarmas recurrentes', 'Otro'].map(sym => (
-                                            <label key={sym} className="flex items-center gap-2 text-xs text-gray-700 cursor-pointer bg-gray-50 p-2 rounded hover:bg-gray-100">
-                                                <input type="checkbox" checked={formData.symptoms.includes(sym)} onChange={() => handleSymptomToggle(sym)} className="rounded text-blue-600"/>
-                                                {sym}
-                                            </label>
-                                        ))}
-                                    </div>
-                                    {formData.symptoms.includes('Otro') && (
-                                        <input placeholder="Especifique otro síntoma" value={formData.otherSymptomDetail} onChange={e => handleChange('otherSymptomDetail', e.target.value)} className="mt-2 w-full border border-gray-300 rounded p-2 text-sm"/>
-                                    )}
-                                </div>
-                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                    <div><label className="text-xs font-bold text-gray-700">Códigos Alarma</label><input value={formData.alarmCodes} onChange={e => handleChange('alarmCodes', e.target.value)} className="w-full bg-white border border-gray-300 rounded p-2 text-sm" placeholder="Ej. E-101, F-45"/></div>
-                                    <div><label className="text-xs font-bold text-gray-700">Mensaje Alarma</label><input value={formData.alarmMessages} onChange={e => handleChange('alarmMessages', e.target.value)} className="w-full bg-white border border-gray-300 rounded p-2 text-sm"/></div>
-                                    <div>
-                                        <label className="text-xs font-bold text-gray-700">¿Desde cuándo?</label>
-                                        <select value={formData.sinceWhen} onChange={e => handleChange('sinceWhen', e.target.value)} className="w-full bg-white border border-gray-300 rounded p-2 text-sm">
-                                            <option value="">Seleccionar...</option>
-                                            <option value="Ahora">Ahora</option>
-                                            <option value="Este turno">Este turno</option>
-                                            <option value="48 hrs">48 hrs</option>
-                                            <option value="+72hrs">+72hrs</option>
-                                        </select>
-                                    </div>
-                                    <div>
-                                        <label className="text-xs font-bold text-gray-700">Frecuencia</label>
-                                        <select value={formData.frequency} onChange={e => handleChange('frequency', e.target.value)} className="w-full bg-white border border-gray-300 rounded p-2 text-sm">
-                                            <option value="">Seleccionar...</option>
-                                            <option value="Primera vez">Primera vez</option>
-                                            <option value="Esporádica">Esporádica</option>
-                                            <option value="Siempre">Siempre</option>
-                                        </select>
-                                    </div>
-                                </div>
-                            </div>
-                        </section>
-                        
-                        {/* SECCIÓN 5 & 6: CONDICIONES & IMPACTO */}
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                             <section className="bg-white p-4 rounded-lg shadow-sm border border-gray-200">
-                                <h4 className="text-xs font-bold text-blue-600 uppercase mb-4 border-b pb-2">5. Condiciones Operación</h4>
-                                <div className="space-y-3">
-                                    <div><label className="text-xs font-bold text-gray-700">Modelo/Producto</label><input value={formData.productModel} onChange={e => handleChange('productModel', e.target.value)} className="w-full bg-white border border-gray-300 rounded p-2 text-sm"/></div>
-                                    <div>
-                                        <label className="text-xs font-bold text-gray-700 block mb-1">¿Se realizaron ajustes recientes a la maquina?</label>
-                                        <div className="flex gap-4">
-                                            <label className="flex items-center gap-1 text-sm"><input type="radio" name="adj" checked={formData.recentAdjustments === 'yes'} onChange={() => handleChange('recentAdjustments', 'yes')}/> Sí</label>
-                                            <label className="flex items-center gap-1 text-sm"><input type="radio" name="adj" checked={formData.recentAdjustments === 'no'} onChange={() => handleChange('recentAdjustments', 'no')}/> No</label>
-                                        </div>
-                                    </div>
-                                    {formData.recentAdjustments === 'yes' && (
-                                        <textarea placeholder="Describa los ajustes..." value={formData.adjustmentsDetail} onChange={e => handleChange('adjustmentsDetail', e.target.value)} className="w-full border border-gray-300 rounded p-2 text-sm" rows={2}/>
-                                    )}
-                                </div>
-                             </section>
-
-                             <section className="bg-white p-4 rounded-lg shadow-sm border border-gray-200">
-                                <h4 className="text-xs font-bold text-blue-600 uppercase mb-4 border-b pb-2">6. Impacto</h4>
-                                <div className="space-y-3">
-                                    <div>
-                                        <label className="text-xs font-bold text-gray-700">Impacto Producción *</label>
-                                        <select value={formData.productionImpact} onChange={e => handleChange('productionImpact', e.target.value)} className="w-full bg-white border border-gray-300 rounded p-2 text-sm">
-                                            <option value="">Seleccionar...</option>
-                                            <option value="Paro total">Paro total</option>
-                                            <option value="Paros frecuentes">Paros frecuentes</option>
-                                            <option value="Reducción velocidad">Reducción velocidad</option>
-                                            <option value="Sin impacto">Sin impacto</option>
-                                        </select>
-                                    </div>
-                                    <div>
-                                        <label className="text-xs font-bold text-gray-700 block mb-1">Impacto Calidad *</label>
-                                        <div className="flex gap-4">
-                                            <label className="flex items-center gap-1 text-sm"><input type="radio" name="qual" checked={formData.qualityImpact === 'yes'} onChange={() => handleChange('qualityImpact', 'yes')}/> Sí</label>
-                                            <label className="flex items-center gap-1 text-sm"><input type="radio" name="qual" checked={formData.qualityImpact === 'no'} onChange={() => handleChange('qualityImpact', 'no')}/> No</label>
-                                        </div>
-                                    </div>
-                                    {formData.qualityImpact === 'yes' && (
-                                        <>
-                                            <select value={formData.defectType} onChange={e => handleChange('defectType', e.target.value)} className="w-full bg-white border border-gray-300 rounded p-2 text-sm mt-2">
-                                                <option value="">Tipo Defecto...</option>
-                                                <option value="Dimensional">Dimensional</option>
-                                                <option value="Apariencia">Apariencia</option>
-                                                <option value="Funcional">Funcional</option>
-                                            </select>
-                                            <textarea placeholder="Descripción del defecto..." value={formData.defectDescription} onChange={e => handleChange('defectDescription', e.target.value)} className="w-full border border-gray-300 rounded p-2 text-sm mt-2" rows={2}/>
-                                        </>
-                                    )}
-                                </div>
-                             </section>
-                        </div>
-
-                        {/* SECCIÓN 7: EVIDENCIA */}
-                        <section className="bg-white p-4 rounded-lg shadow-sm border border-gray-200">
-                            <h4 className="text-xs font-bold text-blue-600 uppercase mb-4 border-b pb-2">7. Evidencia Adjunta</h4>
-                            <div className="border-2 border-dashed border-gray-300 rounded-lg p-6 flex flex-col items-center justify-center text-gray-500 hover:bg-gray-50 cursor-pointer">
-                                <CameraIcon className="w-8 h-8 mb-2"/>
-                                <span className="text-sm font-medium">Haga clic para cargar fotos o videos</span>
-                                <span className="text-xs text-gray-400 mt-1">(JPG, PNG, PDF permitidos)</span>
-                                <input type="file" className="hidden" multiple onChange={e => handleChange('files', e.target.files)} />
-                            </div>
-                        </section>
-                    </div>
-                )}
-
-                {/* FOOTER ACTION */}
-                {!isSimulatingAI && (
-                    <div className="p-4 bg-white border-t border-gray-200 flex justify-end gap-3 shrink-0">
-                        <button onClick={onClose} className="px-6 py-2 bg-gray-200 text-gray-700 rounded font-bold hover:bg-gray-300">Cancelar</button>
-                        <button onClick={simulateAIDiagnosis} className="px-6 py-2 bg-blue-600 text-white rounded font-bold hover:bg-blue-700 shadow-lg flex items-center gap-2">
-                            <SendIcon className="w-4 h-4"/> Enviar Solicitud
-                        </button>
-                    </div>
-                )}
-            </div>
-        </div>
-    );
-};
-
-// --- MAIN COMPONENT ---
 
 const TaWorkOrders: React.FC<TaWorkOrdersProps> = ({ plants = [], orders, setOrders }) => {
-    // State
-    const [filteredOrders, setFilteredOrders] = useState<WorkOrder[]>([]);
     const [selectedOrder, setSelectedOrder] = useState<WorkOrder | null>(null);
     const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
-    const [currentTime, setCurrentTime] = useState(new Date()); // For live timers
+    const [assignModal, setAssignModal] = useState<{isOpen: boolean, otId: string | null}>({isOpen: false, otId: null});
     
-    // Assignment State
-    const [isAssignModalOpen, setIsAssignModalOpen] = useState(false);
-    const [assignTargetId, setAssignTargetId] = useState<string | null>(null);
+    // Live Timer for the Dashboard
+    const [currentTime, setCurrentTime] = useState(new Date());
 
-    // Filters
-    const [filters, setFilters] = useState({
-        search: '',
-        plantId: '',
-        status: '',
-        priority: '',
-        risk: '',
-        responsible: ''
-    });
-
-    // Clock tick
     useEffect(() => {
         const timer = setInterval(() => setCurrentTime(new Date()), 1000);
         return () => clearInterval(timer);
     }, []);
 
-    // Filter Logic
-    useEffect(() => {
-        let result = orders;
+    // Filters State
+    const [searchText, setSearchText] = useState('');
+    const [plantFilter, setPlantFilter] = useState('');
+    const [statusFilter, setStatusFilter] = useState('');
+    const [priorityFilter, setPriorityFilter] = useState('');
+    const [riskFilter, setRiskFilter] = useState('');
+    const [dateFilter, setDateFilter] = useState('');
+    
+    // Metrics Period Filter
+    const [metricsFilter, setMetricsFilter] = useState('30d');
 
-        if (filters.search) {
-            const s = filters.search.toLowerCase();
-            result = result.filter(o => 
-                o.otNumber.toLowerCase().includes(s) ||
-                o.machineName.toLowerCase().includes(s) ||
-                o.machineCode.toLowerCase().includes(s) ||
-                o.description.toLowerCase().includes(s)
-            );
-        }
-        if (filters.plantId) result = result.filter(o => o.plantId === filters.plantId);
-        if (filters.status) result = result.filter(o => o.status === filters.status);
-        if (filters.priority) result = result.filter(o => o.aiData?.priority === filters.priority);
-        if (filters.risk) result = result.filter(o => o.aiData?.riskLevel === filters.risk);
-        if (filters.responsible) result = result.filter(o => o.assignedTo.toLowerCase().includes(filters.responsible.toLowerCase()));
+    const nextOtNumber = useMemo(() => calculateNextOt(orders), [orders]);
 
-        // Sort: P1 first, then Paro Total, then Time
-        result.sort((a, b) => {
-            const pA = a.aiData?.priority === 'P1' ? 0 : a.aiData?.priority === 'P2' ? 1 : 2;
-            const pB = b.aiData?.priority === 'P1' ? 0 : b.aiData?.priority === 'P2' ? 1 : 2;
-            if (pA !== pB) return pA - pB;
-            
-            const msA = a.machineStatus === 'Paro total' ? 0 : 1;
-            const msB = b.machineStatus === 'Paro total' ? 0 : 1;
-            if (msA !== msB) return msA - msB;
-
-            return new Date(b.reportDate).getTime() - new Date(a.reportDate).getTime(); // Newest first
-        });
-
-        setFilteredOrders(result);
-    }, [orders, filters]);
-
-    // KPIs Calculation
-    const kpis = {
-        activeTotal: orders.filter(o => o.status !== 'closed' && o.status !== 'cancelled').length,
-        machinesDown: orders.filter(o => o.status !== 'closed' && o.status !== 'cancelled' && o.machineStatus === 'Paro total').length,
-        p1Active: orders.filter(o => o.status !== 'closed' && o.status !== 'cancelled' && o.aiData?.priority === 'P1').length,
-        highRisk: orders.filter(o => o.status !== 'closed' && o.status !== 'cancelled' && o.aiData?.riskLevel === 'Alto').length,
-        mttr: '2.5 h', // Mocked
-        slaCompliance: '92%' // Mocked
-    };
-
-    // Actions
-    const handleCreateOrder = (newOrderData: any) => {
-        // Convert form data to WorkOrder object
+    const handleCreateOT = (newOrderData: any) => {
         const newOT: WorkOrder = {
             id: Date.now().toString(),
-            otNumber: newOrderData.otNumber || `OT-${Math.floor(Math.random()*10000)}`,
+            otNumber: newOrderData.otNumber,
             plantId: newOrderData.plantId,
             plantName: plants.find(p => p.id === newOrderData.plantId)?.name || '',
-            processName: 'Proceso Mock', // Would find name by ID in real app
-            subprocessName: 'Subproceso Mock', // Would find name by ID
+            processName: 'Proceso', // Simplified lookup
+            subprocessName: 'Subproceso',
             machineId: newOrderData.machineId,
-            machineCode: newOrderData.machineCode || 'M-NEW',
+            machineCode: newOrderData.machineCode,
             machineName: newOrderData.machineName,
             reportDate: new Date().toISOString(),
             detectorName: newOrderData.detectorName,
@@ -1023,265 +772,345 @@ const TaWorkOrders: React.FC<TaWorkOrdersProps> = ({ plants = [], orders, setOrd
             machineStatus: newOrderData.currentStatus as MachineStatus,
             description: newOrderData.failureDescription,
             symptoms: newOrderData.symptoms,
-            aiData: newOrderData.aiDiagnosis ? {
-                ...newOrderData.aiDiagnosis,
-                riskLevel: newOrderData.aiDiagnosis.riskLevel as RiskLevel,
-                priority: newOrderData.aiDiagnosis.priority as WorkOrderPriority
-            } : undefined,
+            operatingHours: newOrderData.operatingHours,
+            safetyRisk: newOrderData.safetyRisk,
+            failureMoment: newOrderData.failureMoment,
+            alarmCodes: newOrderData.alarmCodes,
+            alarmMessages: newOrderData.alarmMessages,
+            sinceWhen: newOrderData.sinceWhen,
+            frequency: newOrderData.frequency,
+            productModel: newOrderData.productModel,
+            recentAdjustments: newOrderData.recentAdjustments,
+            adjustmentsDetail: newOrderData.adjustmentsDetail,
+            impactProduction: newOrderData.productionImpact,
+            impactQuality: newOrderData.qualityImpact,
+            defectType: newOrderData.defectType,
+            defectDescription: newOrderData.defectDescription,
+            evidenceFiles: newOrderData.files ? Array.from(newOrderData.files).map((f: any) => URL.createObjectURL(f)) : [],
+            aiData: newOrderData.aiDiagnosis,
             status: 'unassigned',
             assignedTo: '',
             slaTarget: new Date(Date.now() + 1000 * 60 * 60 * 4).toISOString(),
             logs: [{ date: new Date().toISOString(), action: 'Creación', user: newOrderData.userId }],
             technicalReport: {
-                 inspections: '', measurements: '', diagnosis: '', aiMatch: null, rootCause: '', actions: [], otherActionDetail: '', supplies: '', preventiveMeasures: ''
+                 inspections: '', measurements: '', observations: '', diagnosis: '', aiMatch: null, rootCause: '', actions: [], otherActionDetail: '', supplies: [], preventiveMeasures: ''
             }
         };
         setOrders(prev => [newOT, ...prev]);
         setIsCreateModalOpen(false);
     };
 
-    const handleStatusChange = (id: string, newStatus: WorkOrderStatus, actionLabel: string, comment?: string) => {
-        setOrders(prev => prev.map(o => {
-            if (o.id === id) {
-                return {
-                    ...o,
-                    status: newStatus,
-                    logs: [...o.logs, { date: new Date().toISOString(), action: actionLabel, user: 'Usuario Actual', comment }]
-                };
-            }
-            return o;
-        }));
-        // Update selected if open
-        if (selectedOrder && selectedOrder.id === id) {
-             setSelectedOrder(prev => prev ? ({ ...prev, status: newStatus }) : null);
+    const handleAssign = (user: string) => {
+        if (assignModal.otId) {
+            setOrders(prev => prev.map(o => o.id === assignModal.otId ? { ...o, status: 'assigned', assignedTo: user, logs: [...o.logs, { date: new Date().toISOString(), action: 'Asignación', user: 'Supervisor' }] } : o));
+            setAssignModal({ isOpen: false, otId: null });
         }
     };
 
-    const handleAssign = (id: string) => {
-        setAssignTargetId(id);
-        setIsAssignModalOpen(true);
+    const handleStatusChange = (id: string, newStatus: WorkOrderStatus, actionLabel: string, comment?: string, closedAt?: string) => {
+        setOrders(prev => prev.map(o => o.id === id ? { ...o, status: newStatus, closedAt: closedAt || o.closedAt, logs: [...o.logs, { date: new Date().toISOString(), action: actionLabel, user: 'Usuario', comment }] } : o));
     };
 
-    const handleConfirmAssign = (user: string) => {
-        if (assignTargetId) {
-            setOrders(prev => prev.map(o => o.id === assignTargetId ? { 
-                ...o, 
-                assignedTo: user, 
-                status: 'assigned', 
-                logs: [...o.logs, { date: new Date().toISOString(), action: 'Asignación', user: 'Supervisor', comment: `Asignado a ${user}` }] 
-            } : o));
-            
-            // Also update selectedOrder if it matches the assigned one to reflect changes immediately in side panel
-            if (selectedOrder && selectedOrder.id === assignTargetId) {
-                 setSelectedOrder(prev => prev ? ({ ...prev, assignedTo: user, status: 'assigned' }) : null);
+    // Filter Logic
+    const filteredOrders = orders.filter(order => {
+        const searchLower = searchText.toLowerCase();
+        const matchesSearch = !searchText || 
+            order.otNumber.toLowerCase().includes(searchLower) ||
+            order.machineName.toLowerCase().includes(searchLower) ||
+            order.description.toLowerCase().includes(searchLower);
+        
+        const matchesPlant = !plantFilter || order.plantId === plantFilter;
+        const matchesStatus = !statusFilter || order.status === statusFilter;
+        const matchesPriority = !priorityFilter || order.aiData?.priority === priorityFilter;
+        const matchesRisk = !riskFilter || order.aiData?.riskLevel === riskFilter;
+        
+        // Date comparison (assuming ISO strings, basic check for day match)
+        const matchesDate = !dateFilter || order.reportDate.startsWith(dateFilter);
+
+        return matchesSearch && matchesPlant && matchesStatus && matchesPriority && matchesRisk && matchesDate;
+    });
+
+    // --- METRICS CALCULATION (Real-time + Time Window) ---
+    const metrics = useMemo(() => {
+        const now = Date.now();
+        const hoursMap: Record<string, number> = { '24hr': 24, '48hr': 48, '72hr': 72, '7d': 168, '14d': 336, '30d': 720 };
+        const hours = hoursMap[metricsFilter] || 720;
+        const cutoff = now - (hours * 60 * 60 * 1000);
+
+        // Active Counts (Real-time snapshot, ignores time filter for status)
+        const activeOrders = orders.filter(o => o.status !== 'closed' && o.status !== 'cancelled');
+        const activeTotal = activeOrders.length;
+        const activeP1 = activeOrders.filter(o => o.aiData?.priority === 'P1').length;
+        const paroTotal = activeOrders.filter(o => o.machineStatus === 'Paro total').length;
+        const falla = activeOrders.filter(o => o.machineStatus === 'Funciona con falla').length;
+        const highRisk = activeOrders.filter(o => o.aiData?.riskLevel === 'Alto' || o.safetyRisk === 'Riesgo alto').length;
+
+        // Time-based calculations (MTTR, Availability) based on selected Period
+        // 1. Availability Calculation
+        let totalMachines = 0;
+        plants.forEach(p => {
+            if(p.machines) totalMachines += p.machines.length;
+            p.processes?.forEach(proc => {
+                if(proc.machines) totalMachines += proc.machines.length;
+                proc.subprocesses?.forEach(sub => {
+                    if(sub.machines) totalMachines += sub.machines.length;
+                })
+            })
+        });
+        const totalPotentialHours = totalMachines * hours;
+        let totalDowntimeHours = 0;
+        
+        // Look at ALL orders that overlap with the window for downtime calculation
+        orders.forEach(o => {
+            if (o.machineStatus === 'Paro total' && o.status !== 'cancelled') {
+                const start = new Date(o.reportDate).getTime();
+                const end = o.closedAt ? new Date(o.closedAt).getTime() : now;
+                // Intersection logic: max(start, cutoff) to min(end, now)
+                const effectiveStart = Math.max(start, cutoff);
+                const effectiveEnd = Math.min(end, now);
+                
+                if (effectiveEnd > effectiveStart) {
+                    totalDowntimeHours += (effectiveEnd - effectiveStart) / (1000 * 60 * 60);
+                }
             }
-        }
-        setIsAssignModalOpen(false);
-        setAssignTargetId(null);
-    };
+        });
+        
+        const availability = totalPotentialHours > 0 
+            ? ((totalPotentialHours - totalDowntimeHours) / totalPotentialHours) * 100 
+            : 100;
 
-    // --- RENDER ---
+        // 2. MTTR (Mean Time To Repair) - Only closed orders in window
+        const closedInWindow = orders.filter(o => 
+            o.status === 'closed' && 
+            o.closedAt && 
+            new Date(o.closedAt).getTime() >= cutoff
+        );
+        
+        let totalRepairTimeHours = 0;
+        closedInWindow.forEach(o => {
+            const start = new Date(o.reportDate).getTime();
+            const end = new Date(o.closedAt!).getTime();
+            totalRepairTimeHours += (end - start) / (1000 * 60 * 60);
+        });
+        
+        const mttr = closedInWindow.length > 0 
+            ? totalRepairTimeHours / closedInWindow.length 
+            : 0;
+
+        return {
+            activeTotal,
+            activeP1,
+            paroTotal,
+            falla,
+            highRisk,
+            availability: availability.toFixed(1),
+            mttr: mttr.toFixed(1)
+        };
+    }, [orders, plants, metricsFilter]);
 
     return (
-        <div className="flex flex-col h-full space-y-4">
-            
-            {/* TOP CONTROL BAR */}
-            <div className="bg-white p-4 rounded-lg shadow-sm border border-gray-200 flex flex-col gap-4">
-                <div className="flex justify-between items-center">
+        <div className="bg-white p-6 rounded-lg shadow-sm border border-gray-200 h-full flex flex-col">
+            {/* HEADER */}
+            <div className="flex flex-col gap-4 mb-4">
+                <div className="flex justify-between items-start">
                     <div>
-                        <h2 className="text-xl font-bold text-gray-900">Tablero de Órdenes de Trabajo</h2>
-                        <p className="text-sm text-gray-500 flex items-center gap-2">
+                        <h2 className="text-2xl font-bold text-gray-900">Tablero de Órdenes de Trabajo</h2>
+                        <p className="text-sm text-gray-500 mt-1 flex items-center gap-2">
                             <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span>
-                            Monitoreo en Tiempo Real - Actualizado hace instantes
+                            Monitoreo en Tiempo Real - Actualizado al momento
                         </p>
                     </div>
-                    <div className="flex items-center gap-3">
-                        <div className="relative">
-                            <input 
-                                type="text" 
-                                placeholder="Buscar OT, Máquina, Falla..." 
-                                className="pl-9 pr-4 py-2 bg-gray-100 border-transparent focus:bg-white focus:border-blue-500 focus:ring-0 rounded-lg text-sm w-64 transition-all"
-                                value={filters.search}
-                                onChange={e => setFilters({...filters, search: e.target.value})}
-                            />
-                            <SearchIcon className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"/>
-                        </div>
-                        <button 
-                            onClick={() => setIsCreateModalOpen(true)}
-                            className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg font-bold text-sm shadow-sm transition-colors"
-                        >
-                            <PlusCircleIcon className="w-5 h-5" /> Crear OT
-                        </button>
-                    </div>
+                    <button onClick={() => setIsCreateModalOpen(true)} className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg flex items-center gap-2 text-sm font-bold shadow-sm transition-colors">
+                        <PlusCircleIcon className="w-5 h-5"/> Crear OT
+                    </button>
                 </div>
-                
-                {/* FILTERS */}
-                <div className="flex items-center gap-3 overflow-x-auto pb-1 scrollbar-hide">
-                     <select className="text-xs bg-gray-50 border border-gray-200 rounded px-2 py-1.5 text-gray-700 font-medium focus:ring-blue-500" onChange={e => setFilters({...filters, plantId: e.target.value})}>
+
+                {/* FILTERS BAR */}
+                <div className="bg-gray-50 p-3 rounded-lg border border-gray-200 flex flex-wrap items-center gap-3">
+                    <div className="relative flex-1 min-w-[200px]">
+                        <input 
+                            type="text" 
+                            placeholder="Buscar por OT, Máquina o Descripción..." 
+                            value={searchText}
+                            onChange={(e) => setSearchText(e.target.value)}
+                            className="w-full pl-9 pr-3 py-2 text-xs border border-gray-300 rounded bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        />
+                        <SearchIcon className="w-4 h-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2"/>
+                    </div>
+
+                    <select value={plantFilter} onChange={(e) => setPlantFilter(e.target.value)} className="p-2 text-xs border border-gray-300 rounded bg-white text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500">
                         <option value="">Todas las Plantas</option>
                         {plants.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
-                     </select>
-                     <select className="text-xs bg-gray-50 border border-gray-200 rounded px-2 py-1.5 text-gray-700 font-medium focus:ring-blue-500" onChange={e => setFilters({...filters, status: e.target.value})}>
+                    </select>
+
+                    <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="p-2 text-xs border border-gray-300 rounded bg-white text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500">
                         <option value="">Todos los Estados</option>
                         <option value="unassigned">Por Asignar</option>
-                        <option value="assigned">Asignadas</option>
-                        <option value="on_hold">Pendiente Refacciones</option>
-                     </select>
-                     <select className="text-xs bg-gray-50 border border-gray-200 rounded px-2 py-1.5 text-gray-700 font-medium focus:ring-blue-500" onChange={e => setFilters({...filters, priority: e.target.value})}>
-                        <option value="">Prioridad</option>
-                        <option value="P1">P1 - Alta</option>
-                        <option value="P2">P2 - Media</option>
-                        <option value="P3">P3 - Baja</option>
-                     </select>
-                     <select className="text-xs bg-gray-50 border border-gray-200 rounded px-2 py-1.5 text-gray-700 font-medium focus:ring-blue-500" onChange={e => setFilters({...filters, risk: e.target.value})}>
-                        <option value="">Riesgo IA</option>
+                        <option value="assigned">Asignada</option>
+                        <option value="in_progress">En Ejecución</option>
+                        <option value="on_hold">Pendiente</option>
+                        <option value="testing">En Pruebas</option>
+                        <option value="closed">Cerrada</option>
+                        <option value="cancelled">Cancelada</option>
+                    </select>
+
+                    <select value={priorityFilter} onChange={(e) => setPriorityFilter(e.target.value)} className="p-2 text-xs border border-gray-300 rounded bg-white text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500">
+                        <option value="">Todas las Prioridades</option>
+                        <option value="P1">P1 - Crítica</option>
+                        <option value="P2">P2 - Alta</option>
+                        <option value="P3">P3 - Normal</option>
+                    </select>
+
+                    <select value={riskFilter} onChange={(e) => setRiskFilter(e.target.value)} className="p-2 text-xs border border-gray-300 rounded bg-white text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500">
+                        <option value="">Todos los Riesgos</option>
                         <option value="Alto">Alto</option>
                         <option value="Medio">Medio</option>
                         <option value="Bajo">Bajo</option>
-                     </select>
+                    </select>
+
+                    <div className="relative">
+                        <input 
+                            type="date" 
+                            value={dateFilter}
+                            onChange={(e) => setDateFilter(e.target.value)}
+                            className="pl-8 pr-3 py-1.5 text-xs border border-gray-300 rounded bg-white text-gray-700 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        />
+                        <CalendarIcon className="w-4 h-4 text-gray-400 absolute left-2 top-1/2 -translate-y-1/2 pointer-events-none"/>
+                    </div>
+
+                    {(searchText || plantFilter || statusFilter || priorityFilter || riskFilter || dateFilter) && (
+                        <button 
+                            onClick={() => {
+                                setSearchText('');
+                                setPlantFilter('');
+                                setStatusFilter('');
+                                setPriorityFilter('');
+                                setRiskFilter('');
+                                setDateFilter('');
+                            }}
+                            className="text-xs text-red-500 hover:text-red-700 font-semibold underline px-2"
+                        >
+                            Limpiar
+                        </button>
+                    )}
                 </div>
             </div>
 
-            {/* KPI RIBBON */}
-            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
-                <KPICard title="OT Activas Totales" value={kpis.activeTotal} colorClass="border-blue-500" />
-                <div onClick={() => setFilters({...filters, status: '', search: 'Paro total'})} className="cursor-pointer">
-                     <KPICard title="Máquinas en Paro" value={kpis.machinesDown} colorClass="border-red-600" subtitle="Requiere Atención" />
-                </div>
-                <KPICard title="OT P1 Activas" value={kpis.p1Active} colorClass="border-red-400" />
-                <KPICard title="Riesgo Alto (IA)" value={kpis.highRisk} colorClass="border-orange-500" />
-                <KPICard title="MTTR Promedio" value={kpis.mttr} colorClass="border-green-500" />
-                <KPICard title="Cumplimiento SLA" value={kpis.slaCompliance} colorClass="border-teal-500" />
-            </div>
-
-            {/* MAIN MATRIX (TABLE) */}
-            <div className="flex-1 bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden flex flex-col">
-                <div className="overflow-x-auto flex-1">
-                    <table className="w-full text-left text-sm text-gray-600">
-                        <thead className="bg-gray-50 text-xs uppercase font-bold text-gray-500 border-b border-gray-200">
-                            <tr>
-                                <th className="p-3 w-10 text-center">#</th>
-                                <th className="p-3">OT / Tiempo</th>
-                                <th className="p-3">Ubicación</th>
-                                <th className="p-3">Máquina / Estado</th>
-                                <th className="p-3">Falla / Clasificación IA</th>
-                                <th className="p-3">Prioridad / Riesgo</th>
-                                <th className="p-3">Estado OT</th>
-                                <th className="p-3">Responsable</th>
-                                <th className="p-3 text-center">Acciones</th>
-                            </tr>
-                        </thead>
-                        <tbody className="divide-y divide-gray-100">
-                            {filteredOrders.map(order => {
-                                // Visual Indicator Logic
-                                const isCritical = (order.aiData?.priority === 'P1' && order.machineStatus === 'Paro total') || order.aiData?.riskLevel === 'Alto';
-                                const isWarning = order.aiData?.priority === 'P1' || order.aiData?.riskLevel === 'Medio';
-                                const rowBg = isCritical ? 'bg-red-50' : '';
-
-                                return (
-                                    <tr key={order.id} className={`hover:bg-gray-50 transition-colors ${rowBg}`}>
-                                        <td className="p-3 text-center">
-                                            <div className={`w-3 h-3 rounded-full mx-auto ${isCritical ? 'bg-red-500 animate-pulse' : isWarning ? 'bg-orange-400' : 'bg-green-500'}`}></div>
-                                        </td>
-                                        <td className="p-3">
-                                            <div className="font-bold text-gray-900">{order.otNumber}</div>
-                                            <div className="text-xs font-mono text-gray-500 mt-1 bg-gray-100 px-1 rounded w-fit">
-                                                {calculateTimeElapsed(order.reportDate)}
-                                            </div>
-                                        </td>
-                                        <td className="p-3">
-                                            <div className="text-xs font-semibold text-gray-800">{order.plantName}</div>
-                                            <div className="text-[10px] text-gray-500">{order.processName} &bull; {order.subprocessName}</div>
-                                        </td>
-                                        <td className="p-3">
-                                            <div className="font-semibold text-gray-800 text-xs">{order.machineCode}</div>
-                                            <div className="text-xs text-gray-500 mb-1">{order.machineName}</div>
-                                            {getMachineStatusBadge(order.machineStatus)}
-                                        </td>
-                                        <td className="p-3 max-w-xs">
-                                            <div className="text-xs text-gray-800 line-clamp-2" title={order.description}>{order.description}</div>
-                                            {order.aiData && (
-                                                <div className="mt-1 flex items-center gap-1 text-[10px] text-indigo-600 font-semibold">
-                                                    <AIAssistantIcon className="w-3 h-3" /> {order.aiData.classification}
-                                                </div>
-                                            )}
-                                        </td>
-                                        <td className="p-3">
-                                            <div className="flex flex-col items-start gap-1">
-                                                {getPriorityBadge(order.aiData?.priority || 'P3')}
-                                                <span className={`text-[10px] px-1.5 rounded border ${order.aiData?.riskLevel === 'Alto' ? 'bg-red-100 text-red-700 border-red-200' : 'bg-gray-100 text-gray-600 border-gray-200'}`}>
-                                                    Riesgo: {order.aiData?.riskLevel || 'N/A'}
-                                                </span>
-                                            </div>
-                                        </td>
-                                        <td className="p-3">
-                                            {getStatusBadge(order.status)}
-                                        </td>
-                                        <td className="p-3 text-xs">
-                                            {order.assignedTo ? (
-                                                <div className="flex items-center gap-1 font-medium text-gray-700">
-                                                    <UserIcon className="w-3 h-3 text-gray-400" /> {order.assignedTo}
-                                                </div>
-                                            ) : (
-                                                <span className="text-gray-400 italic">--</span>
-                                            )}
-                                        </td>
-                                        <td className="p-3 text-center">
-                                            <button 
-                                                onClick={() => setSelectedOrder(order)}
-                                                className="text-blue-600 hover:text-blue-800 font-bold text-xs border border-blue-200 hover:bg-blue-50 px-3 py-1.5 rounded transition-colors"
-                                            >
-                                                Gestionar
-                                            </button>
-                                        </td>
-                                    </tr>
-                                );
-                            })}
-                        </tbody>
-                    </table>
-                </div>
-                <div className="p-3 border-t border-gray-200 bg-gray-50 text-xs text-gray-500 flex justify-between items-center">
-                    <span>Mostrando {filteredOrders.length} órdenes</span>
-                    <div className="flex gap-1">
-                        <button className="px-2 py-1 border rounded hover:bg-white">Anterior</button>
-                        <button className="px-2 py-1 border rounded hover:bg-white">Siguiente</button>
+            {/* REAL INDICATORS RIBBON */}
+            <div className="mb-6 grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3">
+                <KPICard title="OT Activas Totales" value={metrics.activeTotal} colorClass="text-gray-900" />
+                <KPICard title="OT P1 Activa" value={metrics.activeP1} colorClass={metrics.activeP1 > 0 ? "text-red-600" : "text-gray-400"} />
+                <KPICard title="Máquinas en Paro" value={metrics.paroTotal} colorClass={metrics.paroTotal > 0 ? "text-red-600" : "text-green-600"} subtitle="Paro Total" />
+                <KPICard title="Máquinas con Falla" value={metrics.falla} colorClass={metrics.falla > 0 ? "text-yellow-600" : "text-gray-400"} subtitle="Operando" />
+                <KPICard title="OT Riesgo Alto" value={metrics.highRisk} colorClass={metrics.highRisk > 0 ? "text-orange-600" : "text-gray-400"} />
+                
+                {/* Time Based Metrics with Filter */}
+                <div className="col-span-2 grid grid-cols-2 gap-3 bg-gray-50 p-2 rounded-lg border border-gray-200 relative">
+                    <div className="absolute top-1 right-1 z-10">
+                        <select 
+                            value={metricsFilter} 
+                            onChange={(e) => setMetricsFilter(e.target.value)} 
+                            className="text-[9px] border border-gray-300 rounded bg-white text-gray-700 py-0.5 px-1 focus:outline-none cursor-pointer hover:border-blue-400"
+                        >
+                            <option value="24hr">24h</option>
+                            <option value="48hr">48h</option>
+                            <option value="72hr">72h</option>
+                            <option value="7d">7d</option>
+                            <option value="14d">14d</option>
+                            <option value="30d">30d</option>
+                        </select>
+                    </div>
+                    <div className="flex flex-col justify-between pt-3">
+                        <p className="text-[10px] text-gray-500 uppercase font-bold tracking-wide">MTTR Promedio</p>
+                        <span className="text-xl font-bold text-blue-600">{metrics.mttr} h</span>
+                    </div>
+                    <div className="flex flex-col justify-between pt-3">
+                        <p className="text-[10px] text-gray-500 uppercase font-bold tracking-wide">Disp. Promedio</p>
+                        <span className={`text-xl font-bold ${Number(metrics.availability) > 90 ? 'text-green-600' : Number(metrics.availability) > 80 ? 'text-yellow-600' : 'text-red-600'}`}>{metrics.availability}%</span>
                     </div>
                 </div>
             </div>
-
-            {/* MODALS & PANELS */}
-            {isCreateModalOpen && (
-                 <CreateWorkOrderModal isOpen={isCreateModalOpen} onClose={() => setIsCreateModalOpen(false)} plants={plants || []} onSave={handleCreateOrder} />
-            )}
             
+            <div className="flex-1 overflow-auto">
+                <table className="w-full text-sm text-left text-gray-600">
+                    <thead className="text-xs text-gray-500 uppercase bg-gray-50 sticky top-0">
+                        <tr>
+                            <th className="px-4 py-3">OT #</th>
+                            <th className="px-4 py-3">Prioridad</th>
+                            <th className="px-4 py-3">Estado Maq.</th>
+                            <th className="px-4 py-3">Tiempo</th>
+                            <th className="px-4 py-3">Máquina</th>
+                            <th className="px-4 py-3">Falla</th>
+                            <th className="px-4 py-3">Asignado</th>
+                            <th className="px-4 py-3 text-right">Acciones</th>
+                        </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-200">
+                        {filteredOrders.length > 0 ? filteredOrders.map(order => {
+                            const start = new Date(order.reportDate).getTime();
+                            const end = order.closedAt ? new Date(order.closedAt).getTime() : currentTime.getTime();
+                            const duration = formatDuration(end - start);
+                            const isClosed = order.status === 'closed' || order.status === 'cancelled';
+
+                            return (
+                                <tr key={order.id} className="hover:bg-gray-50 transition-colors">
+                                    <td className="px-4 py-3 font-bold text-blue-600">{order.otNumber}</td>
+                                    <td className="px-4 py-3">{getPriorityBadge(order.aiData?.priority || 'P3')}</td>
+                                    <td className="px-4 py-3">{getMachineStatusBadge(order.machineStatus)}</td>
+                                    <td className={`px-4 py-3 font-mono text-xs font-bold ${isClosed ? 'text-gray-600' : 'text-blue-700 animate-pulse'}`}>
+                                        {duration}
+                                    </td>
+                                    <td className="px-4 py-3">
+                                        <div className="font-semibold text-gray-800">{order.machineName}</div>
+                                        <div className="text-xs text-gray-400">{order.plantName}</div>
+                                    </td>
+                                    <td className="px-4 py-3 max-w-xs truncate">{order.description}</td>
+                                    <td className="px-4 py-3 text-xs">
+                                        {order.assignedTo ? (
+                                            <span className="font-semibold text-gray-700">{order.assignedTo}</span>
+                                        ) : (
+                                            <span className="text-red-600 font-bold bg-red-50 px-2 py-1 rounded border border-red-100">Por asignar</span>
+                                        )}
+                                    </td>
+                                    <td className="px-4 py-3 text-right">
+                                        <button onClick={() => setSelectedOrder(order)} className="text-blue-600 hover:text-blue-800 font-semibold text-xs">Ver Detalle</button>
+                                    </td>
+                                </tr>
+                            );
+                        }) : (
+                            <tr>
+                                <td colSpan={8} className="text-center py-8 text-gray-400">
+                                    No se encontraron órdenes que coincidan con los filtros.
+                                </td>
+                            </tr>
+                        )}
+                    </tbody>
+                </table>
+            </div>
+
             {selectedOrder && (
                 <SidePanel 
                     selectedOrder={selectedOrder} 
-                    orders={orders} 
+                    orders={orders}
                     onClose={() => setSelectedOrder(null)} 
-                    onAssign={handleAssign}
+                    onAssign={(id) => setAssignModal({ isOpen: true, otId: id })}
                     onStatusChange={handleStatusChange}
                 />
             )}
 
-            <AssignUserModal 
-                isOpen={isAssignModalOpen}
-                onClose={() => setIsAssignModalOpen(false)}
-                onSelect={handleConfirmAssign}
+            <CreateWorkOrderModal 
+                isOpen={isCreateModalOpen} 
+                onClose={() => setIsCreateModalOpen(false)} 
+                plants={plants || []} 
+                onSave={handleCreateOT}
+                nextOtNumber={nextOtNumber}
             />
 
-            <style>{`
-                @keyframes slide-in {
-                    from { transform: translateX(100%); }
-                    to { transform: translateX(0); }
-                }
-                .animate-slide-in { animation: slide-in 0.3s ease-out forwards; }
-                @keyframes fade-in {
-                    from { opacity: 0; transform: translateY(-10px); }
-                    to { opacity: 1; transform: translateY(0); }
-                }
-                .animate-fade-in { animation: fade-in 0.2s ease-out forwards; }
-            `}</style>
+            <AssignUserModal 
+                isOpen={assignModal.isOpen} 
+                onClose={() => setAssignModal({ isOpen: false, otId: null })} 
+                onSelect={handleAssign} 
+            />
         </div>
     );
 };

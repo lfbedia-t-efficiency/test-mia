@@ -1,6 +1,6 @@
 
 import React, { useState } from 'react';
-import { View, ViewTitle, Plant, WorkOrder, HistoryEvent } from './types';
+import { View, ViewTitle, Plant, WorkOrder, HistoryEvent, AiStartContext } from './types';
 import Sidebar from './components/Sidebar';
 import Header from './components/Header';
 import AIAssistant from './pages/AIAssistant';
@@ -277,7 +277,7 @@ const generateMockOrders = (): WorkOrder[] => [
             { date: new Date(Date.now() - 1000 * 60 * 30).toISOString(), action: 'Asignación', user: 'Supervisor' },
         ],
         technicalReport: {
-            inspections: '', measurements: '', diagnosis: '', aiMatch: null, rootCause: '', actions: [], otherActionDetail: '', supplies: '', preventiveMeasures: ''
+            inspections: '', measurements: '', observations: '', diagnosis: '', aiMatch: null, rootCause: '', actions: [], otherActionDetail: '', supplies: [], preventiveMeasures: ''
         }
     },
     {
@@ -304,7 +304,7 @@ const generateMockOrders = (): WorkOrder[] => [
         slaTarget: new Date(Date.now() + 1000 * 60 * 60 * 24).toISOString(),
         logs: [{ date: new Date(Date.now() - 1000 * 60 * 60 * 3).toISOString(), action: 'Creación', user: 'Maria Calidad' }],
         technicalReport: {
-            inspections: '', measurements: '', diagnosis: '', aiMatch: null, rootCause: '', actions: [], otherActionDetail: '', supplies: '', preventiveMeasures: ''
+            inspections: '', measurements: '', observations: '', diagnosis: '', aiMatch: null, rootCause: '', actions: [], otherActionDetail: '', supplies: [], preventiveMeasures: ''
         }
     }
 ];
@@ -314,12 +314,19 @@ const App: React.FC = () => {
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [isCollapsed, setIsCollapsed] = useState(false);
   const [plants, setPlants] = useState<Plant[]>(initialPlantsData);
+  const [language, setLanguage] = useState('Español'); 
   
+  // State for AI Context Handover
+  const [aiContext, setAiContext] = useState<AiStartContext | null>(null);
+
   // Lifted State for Work Orders
   const [workOrders, setWorkOrders] = useState<WorkOrder[]>(generateMockOrders());
   
   // Lifted State for History Events
   const [historyEvents, setHistoryEvents] = useState<HistoryEvent[]>([]);
+
+  // Lifted State for Document Code Structure (Default Pattern)
+  const [docCodePattern, setDocCodePattern] = useState('AAA-1111-A');
 
   const handleAddWorkOrder = (order: WorkOrder) => {
       setWorkOrders(prev => [order, ...prev]);
@@ -329,18 +336,23 @@ const App: React.FC = () => {
       setHistoryEvents(prev => [event, ...prev]);
   };
 
+  const handleAiConsultation = (context: AiStartContext) => {
+      setAiContext(context);
+      setActiveView('AI_ASSISTANT');
+  };
+
   const renderView = () => {
     switch (activeView) {
       case 'AI_ASSISTANT':
-        return <AIAssistant plants={plants} onAddWorkOrder={handleAddWorkOrder} onAddHistoryEvent={handleAddHistoryEvent} />;
+        return <AIAssistant plants={plants} onAddWorkOrder={handleAddWorkOrder} onAddHistoryEvent={handleAddHistoryEvent} initialContext={aiContext} onClearContext={() => setAiContext(null)} />;
       case 'RECENT_HISTORY':
         return <RecentHistory extraEvents={historyEvents} />;
       case 'DOCUMENT_CONTROL_SYSTEM':
         return <DocumentControl setActiveView={setActiveView} />;
       case 'DOCUMENTS_BY_PROCESS':
-        return <TaProcedures plants={plants} setPlants={setPlants} />;
+        return <TaProcedures plants={plants} setPlants={setPlants} docCodePattern={docCodePattern} />;
       case 'CERTIFICATION_DOCUMENTS':
-        return <CertificationDocuments plants={plants} />;
+        return <CertificationDocuments plants={plants} setPlants={setPlants} />;
       case 'WORK_INSTRUCTIONS':
         return <WorkInstructions plants={plants} />;
       case 'IA_CRM_ASSISTANT':
@@ -357,9 +369,9 @@ const App: React.FC = () => {
       case 'PLANTS_PROCESS':
         return <PlantsProcess plants={plants} setPlants={setPlants} />;
       case 'ADMINISTRATION':
-        return <Administration />;
+        return <Administration plants={plants} docCodePattern={docCodePattern} setDocCodePattern={setDocCodePattern} />;
       case 'SETTINGS':
-        return <Settings />;
+        return <Settings language={language} setLanguage={setLanguage} />;
       
       // Production Audit Sub-views
       case 'PA_DASHBOARD':
@@ -375,9 +387,9 @@ const App: React.FC = () => {
       case 'TA_WORK_ORDERS':
         return <TaWorkOrders plants={plants} orders={workOrders} setOrders={setWorkOrders} />;
       case 'TA_MACHINES':
-        return <TaMachines plants={plants} setPlants={setPlants} />;
+        return <TaMachines plants={plants} setPlants={setPlants} onAddWorkOrder={handleAddWorkOrder} workOrders={workOrders} historyEvents={historyEvents} onAiConsultation={handleAiConsultation} />;
       case 'TA_PROCEDURES':
-        return <TaProcedures plants={plants} setPlants={setPlants} />;
+        return <TaProcedures plants={plants} setPlants={setPlants} docCodePattern={docCodePattern} />;
       
       default:
         return <div className="text-gray-800">View not found</div>;
@@ -393,6 +405,7 @@ const App: React.FC = () => {
         setIsOpen={setIsSidebarOpen}
         isCollapsed={isCollapsed}
         setIsCollapsed={setIsCollapsed}
+        language={language}
       />
       <div className={`flex-1 flex flex-col transition-all duration-300 ease-in-out ${isSidebarOpen ? (isCollapsed ? 'ml-20' : 'ml-64') : 'ml-0'}`}>
         <Header 
@@ -400,6 +413,8 @@ const App: React.FC = () => {
             onMenuClick={() => setIsSidebarOpen(!isSidebarOpen)} 
             onAiClick={() => setActiveView('AI_ASSISTANT')}
             onHistoryClick={() => setActiveView('RECENT_HISTORY')}
+            onProfileClick={() => setActiveView('SETTINGS')}
+            language={language}
         />
         <main className="flex-1 p-6 overflow-y-auto">
           {renderView()}

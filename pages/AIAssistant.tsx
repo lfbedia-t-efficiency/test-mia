@@ -1,11 +1,11 @@
 
 import React, { useState, useEffect, useRef } from 'react';
-import { Plant, Process, Subprocess, Machine, Procedure, WorkOrder, WorkOrderPriority, RiskLevel, MachineStatus, HistoryEvent } from '../types';
+import { Plant, Process, Subprocess, Machine, Procedure, WorkOrder, WorkOrderPriority, RiskLevel, MachineStatus, HistoryEvent, AiStartContext } from '../types';
 import { 
     PaperclipIcon, SendIcon, MicrophoneIcon, UserIcon, TEfficiencyIcon, 
     ArrowPathIcon, PlantIcon, ManufacturingIcon, WrenchScrewdriverIcon, DocumentTextIcon,
     TicketIcon, ClockIcon, ExclamationTriangleIcon, SignalIcon, CameraIcon, BookOpenIcon,
-    SearchIcon
+    SearchIcon, CheckCircleIcon
 } from '../components/icons/Icons';
 
 interface Source {
@@ -19,8 +19,9 @@ interface QuickAction {
     value: string;
     // Navigation types + Wizard types
     type: 'plant' | 'process' | 'subprocess' | 'machine' | 'procedure' | 'reset' | 
-          'opt_mode' | // New: Choose between OT and Info
-          'opt_shift' | 'opt_req_type' | 'opt_status' | 'opt_moment' | 'opt_impact_prod' | 'opt_impact_qual' | 'opt_evidence' | 'opt_priority' | 'action_confirm';
+          'opt_mode' | 
+          'opt_shift' | 'opt_req_type' | 'opt_status' | 'opt_moment' | 'opt_safety' | 
+          'opt_symptom' | 'opt_since' | 'opt_frequency' | 'opt_adj' | 'opt_impact_prod' | 'opt_impact_qual' | 'opt_evidence' | 'opt_priority' | 'action_confirm';
 }
 
 interface ChatMessage {
@@ -30,26 +31,42 @@ interface ChatMessage {
     timestamp: string;
     sources?: Source[];
     suggestions?: QuickAction[]; 
-    isSystemMsg?: boolean; // For WO creation success banners
+    isSystemMsg?: boolean; 
 }
 
+// Updated to match CreateWorkOrderModal state
 interface WorkOrderDraft {
     machineId?: string;
     machineName?: string;
     shift?: string;
     requestType?: string;
     
-    // Detailed Technical Info
+    // Header
     machineStatus?: string;
+    safetyRisk?: string;
     failureMoment?: string;
-    description?: string; // includes symptoms
-    alarms?: string;
-    timingFrequency?: string;
-    productContext?: string; // includes adjustments
-    impactProduction?: string;
-    impactQuality?: string;
-    evidenceAttached?: boolean;
 
+    // Details
+    description?: string; 
+    symptoms?: string[];
+    alarmCodes?: string;
+    alarmMessages?: string;
+
+    // Context
+    operatingHours?: string;
+    sinceWhen?: string;
+    frequency?: string;
+    productModel?: string;
+    recentAdjustments?: string; // "yes" | "no"
+    adjustmentsDetail?: string;
+
+    // Impact
+    impactProduction?: string;
+    impactQuality?: string; // "yes" | "no"
+    defectType?: string;
+    defectDescription?: string;
+
+    evidenceAttached?: boolean;
     priority?: string;
 }
 
@@ -60,33 +77,39 @@ interface QueryDraft {
 
 // Logic States
 type FlowStep = 
-    | 'navigation'      // Standard tree navigation
-    | 'select_action_mode' // New: OT vs Query decision
-    | 'view_procedure'  // New: Viewing a procedure
+    | 'navigation'      
+    | 'select_action_mode' 
+    | 'view_procedure'  
     
     // Branch A: Information Query
-    | 'check_docs_availability' // Internal check state
-    | 'no_docs_found'           // Error state: No RAG data
+    | 'check_docs_availability'
+    | 'no_docs_found'           
     | 'collect_query_need'
     | 'collect_query_reason'
     | 'answering_query'
 
-    // Branch B: Work Order Wizard
-    | 'collect_shift'   // Wizard Step 1
-    | 'collect_type'    // Wizard Step 2
-    | 'mode_doubt'      // Legacy small doubt inside OT flow (optional, can merge with Query)
+    // Branch B: Work Order Wizard (Aligned with Form)
+    | 'collect_shift'   
+    | 'collect_type'    
     | 'collect_status'
+    | 'collect_safety' // New
     | 'collect_moment'
     | 'collect_desc'
+    | 'collect_symptoms' // New
     | 'collect_alarms'
-    | 'collect_timing'
-    | 'collect_context'
+    | 'collect_hours' // New
+    | 'collect_since' // New
+    | 'collect_frequency' // New
+    | 'collect_product' // New
+    | 'collect_adjustments_bool' // New
+    | 'collect_adjustments_detail' // New
     | 'collect_impact_prod'
     | 'collect_impact_qual'
+    | 'collect_defect_details' // New
     | 'collect_evidence'
     | 'collect_priority'
     
-    | 'finished';       // Done
+    | 'finished';       
 
 interface ContextState {
     plantId?: string;
@@ -105,9 +128,17 @@ export interface AIAssistantProps {
     plants: Plant[];
     onAddWorkOrder: (order: WorkOrder) => void;
     onAddHistoryEvent: (event: HistoryEvent) => void;
+    initialContext?: AiStartContext | null;
+    onClearContext?: () => void;
 }
 
-const AIAssistant = ({ plants, onAddWorkOrder, onAddHistoryEvent }: AIAssistantProps) => {
+const COMMON_SYMPTOMS = [
+    'Ruidos anormales', 'Vibración excesiva', 'Fugas aceite', 'Fugas agua',
+    'Fugas aire', 'Temp alta', 'Pérdida presión', 'Piezas fuera medida',
+    'Paros frecuentes', 'Olor quemado', 'Fallo eléctrico', 'Alarmas recurrentes'
+];
+
+const AIAssistant = ({ plants, onAddWorkOrder, onAddHistoryEvent, initialContext, onClearContext }: AIAssistantProps) => {
     const [messages, setMessages] = useState<ChatMessage[]>([]);
     const [input, setInput] = useState('');
     const [isTyping, setIsTyping] = useState(false);
@@ -115,18 +146,32 @@ const AIAssistant = ({ plants, onAddWorkOrder, onAddHistoryEvent }: AIAssistantP
     // Initial Context
     const [context, setContext] = useState<ContextState>({
         flowStep: 'navigation',
-        woDraft: {},
+        woDraft: { symptoms: [] },
         queryDraft: {}
     });
     
     const messagesEndRef = useRef<HTMLDivElement>(null);
 
-    // Initial Greeting
+    // Initial Greeting and Context Injection
     useEffect(() => {
-        if (messages.length === 0) {
+        if (initialContext) {
+            const newContext: ContextState = {
+                plantId: initialContext.plantId,
+                processId: initialContext.processId,
+                subprocessId: initialContext.subprocessId,
+                leafId: initialContext.machineId,
+                leafType: 'machine',
+                flowStep: initialContext.intent === 'query' ? 'collect_query_need' : 'collect_shift',
+                woDraft: { machineName: initialContext.machineName, symptoms: [] },
+                queryDraft: {}
+            };
+            setContext(newContext);
+            simulateAIResponse("context_start", newContext);
+            if (onClearContext) onClearContext();
+        } else if (messages.length === 0) {
             simulateAIResponse("initial");
         }
-    }, []);
+    }, [initialContext]);
 
     // Auto-scroll
     useEffect(() => {
@@ -139,7 +184,7 @@ const AIAssistant = ({ plants, onAddWorkOrder, onAddHistoryEvent }: AIAssistantP
         let node: any = null;
         let options: QuickAction[] = [];
 
-        // 0. Leaf Selected (Navigation Done -> Handled by Wizard Logic mostly)
+        // 0. Leaf Selected
         if (currentContext.leafId) {
             if (currentContext.leafType === 'machine') {
                 const allMachines: Machine[] = [];
@@ -154,9 +199,7 @@ const AIAssistant = ({ plants, onAddWorkOrder, onAddHistoryEvent }: AIAssistantP
                 });
                 node = allMachines.find(m => m.id === currentContext.leafId);
             }
-            // For procedures, we might want to find the node too
             if (currentContext.leafType === 'procedure') {
-                 // Simplified lookup: iterate all to find procedure
                  let foundProc: Procedure | undefined;
                  const traverse = (n: any) => {
                      if (n.procedures) {
@@ -209,7 +252,6 @@ const AIAssistant = ({ plants, onAddWorkOrder, onAddHistoryEvent }: AIAssistantP
         return { node: subprocess, options, level: 'subprocess' };
     };
 
-    // Helper: Check if context has any documents
     const getAvailableDocsCount = (ctx: ContextState) => {
         const plant = plants.find(p => p.id === ctx.plantId);
         const process = plant?.processes.find(p => p.id === ctx.processId);
@@ -223,27 +265,10 @@ const AIAssistant = ({ plants, onAddWorkOrder, onAddHistoryEvent }: AIAssistantP
         return count;
     };
 
-    // Mock Search Function
     const mockSearchDocuments = (ctx: ContextState) => {
-        // In a real app, this would search a vector database
-        const plant = plants.find(p => p.id === ctx.plantId);
-        const process = plant?.processes.find(p => p.id === ctx.processId);
-        const subprocess = process?.subprocesses.find(s => s.id === ctx.subprocessId);
-        
-        // Collect relevant documents names for flavor
-        let relevantDocs: string[] = [];
-        if (subprocess?.procedures) relevantDocs.push(...subprocess.procedures.map(p => p.title));
-        if (process?.procedures) relevantDocs.push(...process.procedures.map(p => p.title));
-        if (plant?.procedures) relevantDocs.push(...plant.procedures.map(p => p.title));
-
-        const docName = relevantDocs.length > 0 ? relevantDocs[0] : "Manual de Operación General";
-        
         return {
-            answer: `He analizado la documentación disponible en **${subprocess?.name || process?.name || plant?.name}**.\n\nBasado en tu necesidad ("${ctx.queryDraft.need}") para ("${ctx.queryDraft.reason}"):\n\nEl documento indica que para este procedimiento se debe verificar primero la alimentación neumática a 6 bar. Posteriormente, consulte la sección 4.2 donde se especifican los torques de ajuste.`,
-            sources: [
-                { document: docName, page: Math.floor(Math.random() * 50) + 1, section: '4.2 Ajustes' },
-                { document: 'Normativa ISO 9001:2015', page: 12, section: 'Control Operacional' }
-            ]
+            answer: `Basado en tu necesidad "${ctx.queryDraft.need}", sugiero revisar los manuales disponibles.`,
+            sources: []
         };
     };
 
@@ -252,7 +277,7 @@ const AIAssistant = ({ plants, onAddWorkOrder, onAddHistoryEvent }: AIAssistantP
         const ctx = overrideContext || context;
         const { node, options: navOptions, level } = getCurrentNode(ctx);
 
-        const delay = Math.random() * 500 + 600; 
+        const delay = Math.random() * 500 + 400; 
         
         setTimeout(() => {
             let responseText = "";
@@ -263,83 +288,58 @@ const AIAssistant = ({ plants, onAddWorkOrder, onAddHistoryEvent }: AIAssistantP
             // --- STANDARD NAVIGATION FLOW ---
             if (ctx.flowStep === 'navigation') {
                 if (trigger === "initial") {
-                    responseText = "¡Hola! Soy tu asistente de manufactura inteligente. \n\nPara darte la información más precisa, necesito ubicar el contexto. ¿Sobre qué **Planta** deseas realizar tu consulta hoy?";
+                    responseText = "¡Hola! Soy tu asistente de manufactura. ¿Sobre qué **Planta** deseas realizar tu consulta hoy?";
                 } else if (trigger === "reset") {
-                    responseText = "Entendido, reiniciemos. ¿En qué planta nos enfocamos?";
+                    responseText = "Reiniciando. ¿En qué planta nos enfocamos?";
                 } else if (navOptions.length === 0 && level !== 'root' && level !== 'leaf') {
-                    // NEW: Empty Context Handling
                     const locationName = node?.name || 'esta ubicación';
-                    responseText = `⚠️ **Sin Información Configurada**\n\nLa ubicación **${locationName}** no tiene procesos, máquinas ni documentos registrados actualmente.\n\nPor favor selecciona otra ubicación o contacta al administrador.`;
+                    responseText = `⚠️ **Sin Información Configurada**\n\n${locationName} no tiene activos registrados.`;
                     finalOptions = [{ label: "Volver al Inicio", value: "reset", type: "reset" }];
                 } else if (level === 'plant') {
-                    responseText = `Excelente. Estamos en **${node.name}**. \n\nSelecciona un área o un activo directo:`;
+                    responseText = `Estamos en **${node.name}**. Selecciona un proceso o activo:`;
                 } else if (level === 'process') {
-                    responseText = `Bien, revisando **${node.name}**. \n\nSelecciona el subproceso o equipo:`;
+                    responseText = `Revisando **${node.name}**. Selecciona el subproceso o equipo:`;
                 } else if (level === 'subprocess') {
-                    responseText = `En **${node.name}** tengo estos activos. Selecciona uno para comenzar asistencia:`;
+                    responseText = `En **${node.name}**, selecciona un activo:`;
                 }
             } 
             
-            // --- MACHINE SELECTED: DECISION POINT ---
+            // --- MACHINE SELECTED ---
             else if (ctx.leafType === 'machine' && ctx.flowStep === 'select_action_mode') {
                 const machineName = node?.name || 'la máquina';
-                responseText = `Has seleccionado **${machineName}**. \n\n¿Cómo puedo asistirte con este equipo?\n\n1. **Reportar Falla/OT**: Si el equipo está detenido, con alarma o falla.\n2. **Consultar Información**: Si tienes una duda técnica, buscas un manual o procedimiento.`;
+                responseText = `Has seleccionado **${machineName}**. \n\n¿Qué deseas hacer?`;
                 finalOptions = [
-                    { label: "🚨 Reportar Falla / Crear OT", value: "mode_wo", type: "opt_mode" },
-                    { label: "🔍 Consultar Información / Duda", value: "mode_query", type: "opt_mode" }
+                    { label: "🚨 Crear Orden de Trabajo", value: "mode_wo", type: "opt_mode" },
+                    { label: "🔍 Consultar Información", value: "mode_query", type: "opt_mode" }
                 ];
             }
 
-            // --- BRANCH A: INFORMATION QUERY FLOW (LOGIC UPDATED) ---
+            // --- INFO QUERY FLOW ---
             else if (ctx.flowStep === 'no_docs_found') {
-                // New State: Handled when no documents exist for the context
-                responseText = `⚠️ **Sin Información Disponible**\n\nNo he encontrado manuales, procedimientos o guías técnicas vinculadas a **${node?.name || 'este equipo'}** o su proceso padre.\n\nSin documentación base, no puedo responder consultas técnicas específicas. ¿Qué deseas hacer?`;
-                finalOptions = [
-                    { label: "🚨 Reportar Falla / Crear OT", value: "mode_wo", type: "opt_mode" },
-                    { label: "Reiniciar búsqueda", value: "reset", type: "reset" }
-                ];
+                responseText = `⚠️ **Sin Información**\n\nNo encontré manuales para **${node?.name}**.`;
+                finalOptions = [{ label: "Reiniciar", value: "reset", type: "reset" }];
             }
             else if (ctx.flowStep === 'collect_query_need') {
-                responseText = "Entendido, modo de consulta activado. 🧠\n\nPor favor dime, **¿Cuál es tu necesidad específica o qué estás buscando?**";
-                finalOptions = []; // Free text input
+                responseText = "Modo consulta. **¿Qué información necesitas?**";
+                finalOptions = []; 
             }
             else if (ctx.flowStep === 'collect_query_reason') {
-                responseText = `Comprendido: "${ctx.queryDraft.need}".\n\nPara filtrar mejor los resultados, **¿Para qué necesitas esta información o cuál es el motivo de la consulta?**\n(Ej. Auditoría, Entrenamiento, Ajuste, Duda puntual)`;
-                finalOptions = []; // Free text input
+                responseText = `¿Para qué necesitas esta información? (Auditoría, Duda, etc.)`;
+                finalOptions = []; 
             }
             else if (ctx.flowStep === 'answering_query') {
                 const result = mockSearchDocuments(ctx);
                 responseText = result.answer;
                 sources = result.sources;
-                
-                // Log to history
-                const hierarchy = plants.find(p => p.id === ctx.plantId)?.name || 'Planta';
-                onAddHistoryEvent({
-                    id: `hist-${Date.now()}`,
-                    type: 'Consulta IA',
-                    title: `Consulta: ${ctx.queryDraft.need?.substring(0, 30)}...`,
-                    user: 'Usuario Actual',
-                    timestamp: 'Hace un momento',
-                    criticality: 'info',
-                    details: { 
-                        need: ctx.queryDraft.need,
-                        reason: ctx.queryDraft.reason,
-                        answer: result.answer 
-                    },
-                    hierarchy: hierarchy
-                });
-
-                finalOptions = [
-                    { label: "Nueva Consulta", value: "reset", type: "reset" }
-                ];
+                finalOptions = [{ label: "Nueva Consulta", value: "reset", type: "reset" }];
             }
 
-            // --- BRANCH B: WORK ORDER WIZARD FLOW ---
+            // --- WORK ORDER WIZARD (FORM ALIGNED) ---
             else if (ctx.leafType === 'machine') {
-                const machineName = node?.name || 'la máquina';
+                const machineName = node?.name || ctx.woDraft.machineName || 'la máquina';
 
                 if (ctx.flowStep === 'collect_shift') {
-                    responseText = `Iniciando reporte para **${machineName}**. \n\n¿En qué **Turno** te encuentras?`;
+                    responseText = `Iniciando reporte para **${machineName}**. \n\n¿En qué **Turno** ocurrió?`;
                     finalOptions = [
                         { label: "Turno 1", value: "Turno 1", type: "opt_shift" },
                         { label: "Turno 2", value: "Turno 2", type: "opt_shift" },
@@ -348,15 +348,14 @@ const AIAssistant = ({ plants, onAddWorkOrder, onAddHistoryEvent }: AIAssistantP
                     ];
                 } 
                 else if (ctx.flowStep === 'collect_type') {
-                    responseText = `Registrado: ${ctx.woDraft.shift}. \n\n¿Qué **Tipo de Solicitud** deseas realizar?`;
+                    responseText = `¿Qué **Tipo de Solicitud** es?`;
                     finalOptions = [
-                        { label: "Falla / Mto. Correctivo", value: "Mantenimiento correctivo", type: "opt_req_type" },
-                        { label: "Alarma en Equipo", value: "Alarma en equipo", type: "opt_req_type" },
-                        { label: "Comportamiento Anómalo", value: "Comportamiento anómalo", type: "opt_req_type" },
-                        { label: "Duda de Operación (Escalar)", value: "Duda de operación", type: "opt_req_type" }
+                        { label: "Manto. Correctivo", value: "Mantenimiento correctivo", type: "opt_req_type" },
+                        { label: "Seguridad / HSE", value: "Seguridad / HSE", type: "opt_req_type" },
+                        { label: "Mejora Continua", value: "Mejora Continua", type: "opt_req_type" },
+                        { label: "Servicios Grales", value: "Servicios Generales", type: "opt_req_type" }
                     ];
                 }
-                // --- DETAILED WO FLOW START ---
                 else if (ctx.flowStep === 'collect_status') {
                     responseText = `¿Cuál es el **Estado Actual** de la máquina?`;
                     finalOptions = [
@@ -366,136 +365,201 @@ const AIAssistant = ({ plants, onAddWorkOrder, onAddHistoryEvent }: AIAssistantP
                         { label: "Duda Operativa", value: "Duda de operación", type: "opt_status" }
                     ];
                 }
-                else if (ctx.flowStep === 'collect_moment') {
-                    responseText = `¿En qué **Momento** se presenta la falla?`;
+                else if (ctx.flowStep === 'collect_safety') {
+                    responseText = `¿Existe algún **Riesgo de Seguridad**?`;
                     finalOptions = [
-                        { label: "Continua", value: "Continua", type: "opt_moment" },
-                        { label: "Intermitente", value: "Intermitente", type: "opt_moment" },
+                        { label: "🟢 Bajo", value: "Bajo", type: "opt_safety" },
+                        { label: "🟡 Medio (Precaución)", value: "Medio", type: "opt_safety" },
+                        { label: "🔴 Alto (Peligro)", value: "Alto", type: "opt_safety" }
+                    ];
+                }
+                else if (ctx.flowStep === 'collect_moment') {
+                    responseText = `¿En qué **Momento** se presentó la falla?`;
+                    finalOptions = [
+                        { label: "Operación Normal", value: "Operación normal", type: "opt_moment" },
                         { label: "Al Arrancar", value: "Al arrancar", type: "opt_moment" },
-                        { label: "Operación Normal", value: "Operación normal", type: "opt_moment" }
+                        { label: "Cambio Modelo", value: "Cambio de modelo", type: "opt_moment" },
+                        { label: "En Reposo", value: "En reposo", type: "opt_moment" }
                     ];
                 }
                 else if (ctx.flowStep === 'collect_desc') {
-                    responseText = `Por favor, describe detalladamente la falla e indica los **Síntomas Observados** (ruidos, fugas, etc.).`;
+                    responseText = `Por favor, describe detalladamente la falla. (¿Qué sucedió?)`;
                     finalOptions = []; // Text input
+                }
+                else if (ctx.flowStep === 'collect_symptoms') {
+                    const currentSymptoms = ctx.woDraft.symptoms || [];
+                    responseText = currentSymptoms.length > 0 
+                        ? `Síntomas seleccionados: ${currentSymptoms.join(', ')}. \n\n¿Deseas agregar más o continuar?` 
+                        : `Selecciona los **Síntomas Observados**:`;
+                    
+                    const symptomOptions = COMMON_SYMPTOMS.filter(s => !currentSymptoms.includes(s))
+                        .map(s => ({ label: s, value: s, type: 'opt_symptom' as const }));
+                    
+                    finalOptions = [
+                        ...symptomOptions,
+                        { label: "✅ Continuar", value: "DONE", type: 'opt_symptom' }
+                    ];
                 }
                 else if (ctx.flowStep === 'collect_alarms') {
-                    responseText = `¿Existen **Códigos o Mensajes de Alarma**? \n\nEscríbelos a continuación (o escribe "Ninguno").`;
-                    finalOptions = []; // Text input
+                    responseText = `Si hay **Códigos de Alarma** o mensajes en pantalla, escríbelos. Si no, escribe "Ninguno".`;
+                    finalOptions = []; 
                 }
-                else if (ctx.flowStep === 'collect_timing') {
-                    responseText = `¿**Desde cuándo** ocurre el problema y con qué **Frecuencia**?`;
-                    finalOptions = []; // Text input
+                else if (ctx.flowStep === 'collect_hours') {
+                    responseText = `¿Cuáles son las **Horas de Operación** actuales del equipo?`;
+                    finalOptions = []; 
                 }
-                else if (ctx.flowStep === 'collect_context') {
-                    responseText = `Para el contexto operativo: \n\n1. ¿Qué **Modelo/Producto** está corriendo? \n2. ¿Se realizaron **Ajustes Recientes**? (Si sí, ¿cuáles?)`;
-                    finalOptions = []; // Text input
+                else if (ctx.flowStep === 'collect_since') {
+                    responseText = `¿**Desde cuándo** ocurre este problema?`;
+                    finalOptions = [
+                        { label: "Hace momentos", value: "Hace unos momentos", type: "opt_since" },
+                        { label: "Inicio Turno", value: "Inicio de turno", type: "opt_since" },
+                        { label: "Desde Ayer", value: "Desde ayer", type: "opt_since" },
+                        { label: "Semana Pasada", value: "Semana pasada", type: "opt_since" }
+                    ];
+                }
+                else if (ctx.flowStep === 'collect_frequency') {
+                    responseText = `¿Con qué **Frecuencia** se presenta?`;
+                    finalOptions = [
+                        { label: "Primera vez", value: "Primera vez", type: "opt_frequency" },
+                        { label: "Intermitente", value: "Intermitente", type: "opt_frequency" },
+                        { label: "Constante", value: "Constante", type: "opt_frequency" },
+                        { label: "Cada ciclo", value: "Cada ciclo", type: "opt_frequency" }
+                    ];
+                }
+                else if (ctx.flowStep === 'collect_product') {
+                    responseText = `¿Qué **Modelo o Producto** se está corriendo?`;
+                    finalOptions = []; 
+                }
+                else if (ctx.flowStep === 'collect_adjustments_bool') {
+                    responseText = `¿Se realizaron **Ajustes Recientes** a la máquina?`;
+                    finalOptions = [
+                        { label: "Sí", value: "yes", type: "opt_adj" },
+                        { label: "No", value: "no", type: "opt_adj" }
+                    ];
+                }
+                else if (ctx.flowStep === 'collect_adjustments_detail') {
+                    responseText = `Por favor, describe qué ajustes se realizaron.`;
+                    finalOptions = []; 
                 }
                 else if (ctx.flowStep === 'collect_impact_prod') {
                     responseText = `¿Cuál es el **Impacto en Producción**?`;
                     finalOptions = [
-                        { label: "Paro Total", value: "Paro total", type: "opt_impact_prod" },
-                        { label: "Paros Frecuentes", value: "Paros frecuentes", type: "opt_impact_prod" },
-                        { label: "Reducción Velocidad", value: "Reducción velocidad", type: "opt_impact_prod" },
-                        { label: "Sin Impacto", value: "Sin impacto", type: "opt_impact_prod" }
+                        { label: "Sin impacto", value: "Sin impacto", type: "opt_impact_prod" },
+                        { label: "Reducción Vel.", value: "Reducción velocidad", type: "opt_impact_prod" },
+                        { label: "Paros Cortos", value: "Paros cortos", type: "opt_impact_prod" },
+                        { label: "Paro de Línea", value: "Paro total", type: "opt_impact_prod" }
                     ];
                 }
                 else if (ctx.flowStep === 'collect_impact_qual') {
-                    responseText = `¿Existe **Impacto en Calidad**? \n\nSi es afirmativo, describe el defecto. Si no, escribe "No".`;
-                    finalOptions = []; // Text input
+                    responseText = `¿Existe **Impacto en Calidad** (piezas defectuosas)?`;
+                    finalOptions = [
+                        { label: "Sí", value: "yes", type: "opt_impact_qual" },
+                        { label: "No", value: "no", type: "opt_impact_qual" }
+                    ];
+                }
+                else if (ctx.flowStep === 'collect_defect_details') {
+                    responseText = `Describe el **Tipo de Defecto** y detalles.`;
+                    finalOptions = []; 
                 }
                 else if (ctx.flowStep === 'collect_evidence') {
-                    responseText = `¿Deseas adjuntar **Fotografías de Evidencia** para agilizar el diagnóstico?`;
+                    responseText = `¿Deseas adjuntar **Fotografías**?`;
                     finalOptions = [
-                        { label: "📸 Adjuntar Foto (Simulado)", value: "yes", type: "opt_evidence" },
+                        { label: "📸 Adjuntar (Simulado)", value: "yes", type: "opt_evidence" },
                         { label: "Omitir", value: "no", type: "opt_evidence" }
                     ];
                 }
                 else if (ctx.flowStep === 'collect_priority') {
-                    responseText = `Gracias por la información detallada. \n\nPor último, según tu criterio, ¿Qué **Prioridad** asignarías a este evento?`;
+                    responseText = `Finalmente, ¿Qué **Prioridad** sugieres?`;
                     finalOptions = [
-                        { label: "P1 - Crítica (Paro)", value: "P1", type: "opt_priority" },
-                        { label: "P2 - Alta (Falla)", value: "P2", type: "opt_priority" },
+                        { label: "P1 - Crítica", value: "P1", type: "opt_priority" },
+                        { label: "P2 - Alta", value: "P2", type: "opt_priority" },
                         { label: "P3 - Normal", value: "P3", type: "opt_priority" }
                     ];
                 }
                 else if (ctx.flowStep === 'finished') {
-                    // 1. GENERATE PRE-DIAGNOSIS (SIMULATED)
-                    const operatorInstructions = "⚠️ PRECAUCIÓN: No intente reiniciar el equipo si hay ruidos anormales.\n\n1. Verificar suministro eléctrico.\n2. Revisar nivel de fluidos.\n3. Aislar la zona.";
-                    const aiRisk = ctx.woDraft.priority === 'P1' || ctx.woDraft.machineStatus === 'Paro total' ? 'Alto' : 'Medio';
-                    
-                    const aiData = {
-                        classification: "Falla Mecánica General (Auto-Generado)",
-                        priority: ctx.woDraft.priority as WorkOrderPriority,
-                        riskLevel: aiRisk as RiskLevel,
-                        productionImpact: ctx.woDraft.impactProduction || 'Sin impacto',
-                        qualityImpact: ctx.woDraft.impactQuality !== 'No',
-                        operatorInstructions: operatorInstructions,
-                        rootCauses: [{ cause: "Desgaste de componentes", probability: "75%" }],
-                        suggestedActions: ["Inspección visual", "Revisión de bitácora"]
-                    };
-
-                    // 2. CREATE WORK ORDER OBJECT
+                    // GENERATE WORK ORDER
                     const otId = `OT-${Math.floor(Math.random() * 9000) + 1000}`;
                     const newWorkOrder: WorkOrder = {
                         id: `wo-${Date.now()}`,
                         otNumber: otId,
                         plantId: ctx.plantId || '',
                         plantName: plants.find(p => p.id === ctx.plantId)?.name || 'Planta',
-                        processName: 'Proceso Auto',
-                        subprocessName: 'Subproceso Auto',
+                        processName: 'Proceso IA',
+                        subprocessName: 'Subproceso IA',
                         machineId: ctx.leafId || '',
-                        machineCode: 'M-AUTO', // In real app would look up code from node
-                        machineName: node?.name || 'Máquina',
+                        machineCode: 'M-AUTO', 
+                        machineName: node?.name || ctx.woDraft.machineName || 'Máquina',
+                        
+                        // Header
                         reportDate: new Date().toISOString(),
-                        detectorName: 'Usuario IA',
+                        detectorName: 'Usuario Chat',
                         shift: ctx.woDraft.shift || 'Turno 1',
-                        requestType: ctx.woDraft.requestType || 'Falla',
+                        requestType: ctx.woDraft.requestType || 'Mantenimiento correctivo',
                         machineStatus: (ctx.woDraft.machineStatus as MachineStatus) || 'Funciona con falla',
-                        description: ctx.woDraft.description || 'Reporte generado vía IA',
-                        symptoms: [],
-                        aiData: aiData,
+                        safetyRisk: ctx.woDraft.safetyRisk || 'Bajo',
+                        failureMoment: ctx.woDraft.failureMoment || '',
+
+                        // Details
+                        description: ctx.woDraft.description || '',
+                        symptoms: ctx.woDraft.symptoms || [],
+                        alarmCodes: ctx.woDraft.alarmCodes || '', 
+                        alarmMessages: '', // Combined in chat usually
+
+                        // Context
+                        operatingHours: ctx.woDraft.operatingHours || '0',
+                        sinceWhen: ctx.woDraft.sinceWhen || '',
+                        frequency: ctx.woDraft.frequency || '',
+                        productModel: ctx.woDraft.productModel || '',
+                        recentAdjustments: ctx.woDraft.recentAdjustments || 'no',
+                        adjustmentsDetail: ctx.woDraft.adjustmentsDetail || '',
+
+                        // Impact
+                        impactProduction: ctx.woDraft.impactProduction || 'Sin impacto',
+                        impactQuality: ctx.woDraft.impactQuality || 'no',
+                        defectType: ctx.woDraft.defectType || '',
+                        defectDescription: ctx.woDraft.defectDescription || '',
+                        evidenceFiles: ctx.woDraft.evidenceAttached ? ['https://picsum.photos/200/300'] : [],
+                        
+                        // AI Data
+                        aiData: {
+                            classification: "Diagnóstico IA Preliminar",
+                            priority: ctx.woDraft.priority as WorkOrderPriority,
+                            riskLevel: ctx.woDraft.safetyRisk === 'Alto' ? 'Alto' : 'Medio',
+                            productionImpact: ctx.woDraft.impactProduction || 'Sin impacto',
+                            qualityImpact: ctx.woDraft.impactQuality === 'yes',
+                            operatorInstructions: "1. Aislar máquina.\n2. Esperar técnico.",
+                            rootCauses: [{ cause: "Análisis pendiente", probability: "50%" }],
+                            suggestedActions: ["Revisión general"]
+                        },
                         status: 'unassigned',
                         assignedTo: '',
                         slaTarget: new Date(Date.now() + 1000 * 60 * 60 * 4).toISOString(),
-                        logs: [{ date: new Date().toISOString(), action: 'Creación vía IA', user: 'Asistente IA' }],
+                        logs: [{ date: new Date().toISOString(), action: 'Creación vía Chat', user: 'Asistente IA' }],
                         technicalReport: {
-                             inspections: '', measurements: '', diagnosis: '', aiMatch: null, rootCause: '', actions: [], otherActionDetail: '', supplies: '', preventiveMeasures: ''
+                             inspections: '', measurements: '', observations: '', diagnosis: '', aiMatch: null, rootCause: '', actions: [], otherActionDetail: '', supplies: [], preventiveMeasures: ''
                         }
                     };
 
-                    // 3. EXECUTE CALLBACK TO ADD TO DASHBOARD
                     onAddWorkOrder(newWorkOrder);
-
-                    // 4. ADD TO HISTORY
                     onAddHistoryEvent({
                         id: `hist-${Date.now()}`,
                         type: 'Orden de Trabajo',
                         title: `OT Generada: ${otId}`,
                         user: 'Usuario Actual',
                         timestamp: 'Hace un momento',
-                        criticality: aiRisk === 'Alto' ? 'high' : 'medium',
-                        details: { 
-                            status: 'Abierta', 
-                            priority: ctx.woDraft.priority, 
-                            assignedTo: 'Por Asignar' 
-                        },
+                        criticality: 'medium',
+                        details: { status: 'Abierta' },
                         hierarchy: `${newWorkOrder.plantName} / ${newWorkOrder.machineName}`
                     });
 
-                    // 5. RESPONSE TO USER
-                    responseText = `✅ **Solicitud Generada Exitosamente**\n\n**Folio:** ${otId}\n**Máquina:** ${machineName}\n\n🤖 **PRE-DIAGNÓSTICO IA:**\n\n**Instrucciones al Operador:**\n${operatorInstructions}\n\n**Riesgo:** ${aiRisk}\n**Acción:** He notificado al equipo técnico. Puedes ver la orden en el Tablero.`;
+                    responseText = `✅ **OT Generada: ${otId}**\n\nTodos los datos han sido registrados en el formato oficial.\n\n**Máquina:** ${machineName}\n**Falla:** ${ctx.woDraft.description}`;
                     isSystem = true;
-                    finalOptions = [
-                        { label: "Nueva Consulta", value: "reset", type: "reset" }
-                    ];
+                    finalOptions = [{ label: "Nueva Consulta", value: "reset", type: "reset" }];
                 }
             }
             
-            // --- PROCEDURE FLOW (Simple) ---
             else if (ctx.flowStep === 'view_procedure') {
-                 const procTitle = node?.title || 'Procedimiento';
-                 responseText = `He cargado el procedimiento **${procTitle}**. Puedes hacerme preguntas sobre su contenido.`;
+                 responseText = `Procedimiento **${node?.title}** cargado.`;
                  finalOptions = [{ label: "Cerrar", value: "reset", type: "reset" }];
             }
 
@@ -517,7 +581,6 @@ const AIAssistant = ({ plants, onAddWorkOrder, onAddHistoryEvent }: AIAssistantP
     const handleSend = (text: string = input) => {
         if (!text.trim()) return;
 
-        // 1. Add User Message
         const userMsg: ChatMessage = {
             id: Date.now(),
             sender: 'user',
@@ -527,13 +590,38 @@ const AIAssistant = ({ plants, onAddWorkOrder, onAddHistoryEvent }: AIAssistantP
         setMessages(prev => [...prev, userMsg]);
         setInput('');
 
-        // 2. Process Logic based on State
         const currentDraft = { ...context.woDraft };
         const currentQuery = { ...context.queryDraft };
         let nextStep: FlowStep | null = null;
 
-        // --- QUERY BRANCH TEXT INPUTS ---
-        if (context.flowStep === 'collect_query_need') {
+        // --- BRANCH TEXT HANDLERS ---
+        
+        if (context.flowStep === 'collect_desc') {
+            currentDraft.description = text;
+            nextStep = 'collect_symptoms';
+        }
+        else if (context.flowStep === 'collect_alarms') {
+            currentDraft.alarmCodes = text; // Simulating combined input
+            nextStep = 'collect_hours';
+        }
+        else if (context.flowStep === 'collect_hours') {
+            currentDraft.operatingHours = text;
+            nextStep = 'collect_since';
+        }
+        else if (context.flowStep === 'collect_product') {
+            currentDraft.productModel = text;
+            nextStep = 'collect_adjustments_bool';
+        }
+        else if (context.flowStep === 'collect_adjustments_detail') {
+            currentDraft.adjustmentsDetail = text;
+            nextStep = 'collect_impact_prod';
+        }
+        else if (context.flowStep === 'collect_defect_details') {
+            currentDraft.defectDescription = text;
+            currentDraft.defectType = "Reportado en chat";
+            nextStep = 'collect_evidence';
+        }
+        else if (context.flowStep === 'collect_query_need') {
             currentQuery.need = text;
             nextStep = 'collect_query_reason';
         }
@@ -541,35 +629,13 @@ const AIAssistant = ({ plants, onAddWorkOrder, onAddHistoryEvent }: AIAssistantP
             currentQuery.reason = text;
             nextStep = 'answering_query';
         }
-        
-        // --- WO BRANCH TEXT INPUTS ---
-        else if (context.flowStep === 'collect_desc') {
-            currentDraft.description = text;
-            nextStep = 'collect_alarms';
-        }
-        else if (context.flowStep === 'collect_alarms') {
-            currentDraft.alarms = text;
-            nextStep = 'collect_timing';
-        }
-        else if (context.flowStep === 'collect_timing') {
-            currentDraft.timingFrequency = text;
-            nextStep = 'collect_context';
-        }
-        else if (context.flowStep === 'collect_context') {
-            currentDraft.productContext = text;
-            nextStep = 'collect_impact_prod';
-        }
-        else if (context.flowStep === 'collect_impact_qual') {
-            currentDraft.impactQuality = text;
-            nextStep = 'collect_evidence';
-        }
 
         if (nextStep) {
             const newContext = { ...context, woDraft: currentDraft, queryDraft: currentQuery, flowStep: nextStep };
             setContext(newContext);
             simulateAIResponse("next_step", newContext);
         } else {
-            // Default NLP Match for navigation if not in wizard flow
+            // Default NLP match attempt
             const { options } = getCurrentNode(context);
             const match = options.find(opt => opt.label.toLowerCase().includes(text.toLowerCase()));
             if (match) {
@@ -582,25 +648,23 @@ const AIAssistant = ({ plants, onAddWorkOrder, onAddHistoryEvent }: AIAssistantP
 
     const handleQuickAction = (action: QuickAction) => {
         if (action.type === 'reset') {
-            setContext({ flowStep: 'navigation', woDraft: {}, queryDraft: {} });
-            simulateAIResponse("reset", { flowStep: 'navigation', woDraft: {}, queryDraft: {} });
+            setContext({ flowStep: 'navigation', woDraft: { symptoms: [] }, queryDraft: {} });
+            simulateAIResponse("reset", { flowStep: 'navigation', woDraft: { symptoms: [] }, queryDraft: {} });
             return;
         }
 
         const newContext = { ...context };
 
-        // NAVIGATION LOGIC
+        // Navigation
         if (['plant', 'process', 'subprocess', 'machine', 'procedure'].includes(action.type)) {
             if (action.type === 'plant') newContext.plantId = action.value;
             if (action.type === 'process') newContext.processId = action.value;
             if (action.type === 'subprocess') newContext.subprocessId = action.value;
-            
             if (action.type === 'machine') {
                 newContext.leafId = action.value;
                 newContext.leafType = 'machine';
-                // CHANGE: Instead of going straight to shift, we go to Mode Selection
                 newContext.flowStep = 'select_action_mode'; 
-                newContext.woDraft = { machineId: action.value, machineName: action.label };
+                newContext.woDraft = { machineId: action.value, machineName: action.label, symptoms: [] };
             } else if (action.type === 'procedure') {
                 newContext.leafId = action.value;
                 newContext.leafType = 'procedure';
@@ -608,46 +672,68 @@ const AIAssistant = ({ plants, onAddWorkOrder, onAddHistoryEvent }: AIAssistantP
             }
         }
 
-        // --- MODE SELECTION ---
+        // Mode
         if (action.type === 'opt_mode') {
-            if (action.value === 'mode_wo') {
-                newContext.flowStep = 'collect_shift';
-            } else if (action.value === 'mode_query') {
-                // UPDATE: Check availability before collecting need
-                const docCount = getAvailableDocsCount(newContext);
-                if (docCount > 0) {
-                    newContext.flowStep = 'collect_query_need';
-                } else {
-                    newContext.flowStep = 'no_docs_found';
-                }
-            }
+            if (action.value === 'mode_wo') newContext.flowStep = 'collect_shift';
+            else newContext.flowStep = 'collect_query_need';
         }
 
-        // --- WO WIZARD LOGIC ---
+        // WO Wizard
         if (action.type === 'opt_shift') {
             newContext.woDraft.shift = action.value;
             newContext.flowStep = 'collect_type';
         }
         else if (action.type === 'opt_req_type') {
             newContext.woDraft.requestType = action.value;
-            // Go to full flow starting with Status for everything
             newContext.flowStep = 'collect_status';
         }
         else if (action.type === 'opt_status') {
             newContext.woDraft.machineStatus = action.value;
+            newContext.flowStep = 'collect_safety';
+        }
+        else if (action.type === 'opt_safety') {
+            newContext.woDraft.safetyRisk = action.value;
             newContext.flowStep = 'collect_moment';
         }
         else if (action.type === 'opt_moment') {
             newContext.woDraft.failureMoment = action.value;
             newContext.flowStep = 'collect_desc';
         }
+        else if (action.type === 'opt_symptom') {
+            if (action.value === 'DONE') {
+                newContext.flowStep = 'collect_alarms';
+            } else {
+                // Add symptom and stay on step
+                const current = newContext.woDraft.symptoms || [];
+                if (!current.includes(action.value)) {
+                    newContext.woDraft.symptoms = [...current, action.value];
+                }
+            }
+        }
+        else if (action.type === 'opt_since') {
+            newContext.woDraft.sinceWhen = action.value;
+            newContext.flowStep = 'collect_frequency';
+        }
+        else if (action.type === 'opt_frequency') {
+            newContext.woDraft.frequency = action.value;
+            newContext.flowStep = 'collect_product';
+        }
+        else if (action.type === 'opt_adj') {
+            newContext.woDraft.recentAdjustments = action.value;
+            if (action.value === 'yes') newContext.flowStep = 'collect_adjustments_detail';
+            else newContext.flowStep = 'collect_impact_prod';
+        }
         else if (action.type === 'opt_impact_prod') {
             newContext.woDraft.impactProduction = action.value;
             newContext.flowStep = 'collect_impact_qual';
         }
+        else if (action.type === 'opt_impact_qual') {
+            newContext.woDraft.impactQuality = action.value;
+            if (action.value === 'yes') newContext.flowStep = 'collect_defect_details';
+            else newContext.flowStep = 'collect_evidence';
+        }
         else if (action.type === 'opt_evidence') {
             newContext.woDraft.evidenceAttached = action.value === 'yes';
-            // If user clicked simulate upload, maybe show a little toast?
             newContext.flowStep = 'collect_priority';
         }
         else if (action.type === 'opt_priority') {
@@ -657,16 +743,22 @@ const AIAssistant = ({ plants, onAddWorkOrder, onAddHistoryEvent }: AIAssistantP
 
         setContext(newContext);
         
-        // Visual Ack
+        // Add visual user message
         const userAck: ChatMessage = {
             id: Date.now(),
             sender: 'user',
-            text: action.label,
+            text: action.value === 'DONE' ? 'Continuar' : action.label,
             timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
         };
         setMessages(prev => [...prev, userAck]);
 
-        simulateAIResponse("action", newContext);
+        // Don't trigger AI response immediately if just selecting a symptom (unless DONE)
+        if (action.type !== 'opt_symptom' || action.value === 'DONE') {
+            simulateAIResponse("action", newContext);
+        } else {
+            // Re-trigger symptom prompt to refresh options
+            simulateAIResponse("action", newContext);
+        }
     };
 
     const getActionIcon = (type: string) => {
@@ -678,12 +770,15 @@ const AIAssistant = ({ plants, onAddWorkOrder, onAddHistoryEvent }: AIAssistantP
             case 'procedure': return <DocumentTextIcon className="w-3 h-3" />;
             case 'reset': return <ArrowPathIcon className="w-3 h-3" />;
             
-            case 'opt_mode': return <SignalIcon className="w-3 h-3" />; // Icon for Mode Selection
-
+            case 'opt_mode': return <SignalIcon className="w-3 h-3" />; 
             case 'opt_shift': return <ClockIcon className="w-3 h-3" />;
             case 'opt_req_type': return <TicketIcon className="w-3 h-3" />;
             case 'opt_status': return <SignalIcon className="w-3 h-3" />;
+            case 'opt_safety': return <ExclamationTriangleIcon className="w-3 h-3" />;
             case 'opt_moment': return <ClockIcon className="w-3 h-3" />;
+            case 'opt_symptom': return <CheckCircleIcon className="w-3 h-3" />;
+            case 'opt_since': return <ClockIcon className="w-3 h-3" />;
+            case 'opt_frequency': return <SignalIcon className="w-3 h-3" />;
             case 'opt_impact_prod': return <ExclamationTriangleIcon className="w-3 h-3" />;
             case 'opt_evidence': return <CameraIcon className="w-3 h-3" />;
             case 'opt_priority': return <ExclamationTriangleIcon className="w-3 h-3" />;
@@ -768,7 +863,11 @@ const AIAssistant = ({ plants, onAddWorkOrder, onAddHistoryEvent }: AIAssistantP
                                     <button
                                         key={idx}
                                         onClick={() => handleQuickAction(suggestion)}
-                                        className="bg-white border border-blue-200 hover:border-blue-400 hover:bg-blue-50 text-blue-700 text-xs px-3 py-1.5 rounded-full shadow-sm transition-all transform hover:scale-105 active:scale-95 animate-fade-in flex items-center gap-2"
+                                        className={`text-xs px-3 py-1.5 rounded-full shadow-sm transition-all transform hover:scale-105 active:scale-95 animate-fade-in flex items-center gap-2 ${
+                                            suggestion.value === 'DONE' 
+                                            ? 'bg-green-600 text-white hover:bg-green-700 border-transparent' 
+                                            : 'bg-white border border-blue-200 hover:border-blue-400 hover:bg-blue-50 text-blue-700'
+                                        }`}
                                         style={{ animationDelay: `${idx * 50}ms` }}
                                     >
                                         {getActionIcon(suggestion.type)}
@@ -808,11 +907,7 @@ const AIAssistant = ({ plants, onAddWorkOrder, onAddHistoryEvent }: AIAssistantP
                         value={input}
                         onChange={(e) => setInput(e.target.value)}
                         onKeyDown={(e) => e.key === 'Enter' && handleSend()}
-                        placeholder={
-                            ['collect_desc', 'collect_alarms', 'collect_timing', 'collect_context', 'collect_impact_qual', 'collect_query_need', 'collect_query_reason'].includes(context.flowStep) ? "Escribe tu respuesta aquí..." :
-                            context.flowStep === 'mode_doubt' ? "Escribe tu pregunta técnica..." : 
-                            "Escribe o selecciona una opción..."
-                        }
+                        placeholder="Escribe tu respuesta aquí..."
                         className="flex-1 bg-transparent border-none focus:ring-0 text-sm text-gray-800 placeholder-gray-400"
                         autoFocus
                     />

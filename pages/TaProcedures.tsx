@@ -1,10 +1,12 @@
+
 import React, { useState } from 'react';
 import { Plant, Process, Subprocess, Procedure, ProcedureDocumentItem, DocumentVersion, DocVersionStatus } from '../types';
-import { PlusCircleIcon, ChevronDownIcon, BookOpenIcon, ArrowUpOnSquareIcon, PaperclipIcon, TrashIcon, BellIcon, XIcon, EyeIcon, ClockIcon, CheckCircleIcon, PencilIcon, ArchiveBoxIcon } from '../components/icons/Icons';
+import { PlusCircleIcon, ChevronDownIcon, BookOpenIcon, ArrowUpOnSquareIcon, PaperclipIcon, TrashIcon, BellIcon, XIcon, EyeIcon, ClockIcon, CheckCircleIcon, PencilIcon, ArchiveBoxIcon, PrinterIcon, ArrowDownIcon, CalendarIcon, UserIcon, DocumentTextIcon } from '../components/icons/Icons';
 
 interface TaProceduresProps {
     plants: Plant[];
     setPlants: (plants: Plant[]) => void;
+    docCodePattern: string; // New prop
 }
 
 // Mock Current User for permissions
@@ -60,12 +62,196 @@ interface DocStats {
     expired: number; // Red
 }
 
+interface PreviewData {
+    name: string;
+    code: string;
+    type: string; // Procedure Title
+    version: string;
+    status: DocVersionStatus;
+    renewalDate: string;
+    responsible: string;
+    file: string;
+}
+
 const MOCK_USERS = [
     { id: 'u1', name: 'Ana Lopez', role: 'Supervisor' },
     { id: 'u2', name: 'Juan Pérez', role: 'Técnico' },
     { id: 'u3', name: 'Carlos Ruiz', role: 'Gerente' },
     { id: 'u4', name: 'Maria Garcia', role: 'Auditor' },
 ];
+
+// Helper to generate code based on pattern
+const generateCodeFromPattern = (pattern: string) => {
+    return pattern.split('').map(char => {
+        if (char === 'A') return String.fromCharCode(65 + Math.floor(Math.random() * 26)); // Random Letter A-Z
+        if (char === '1') return Math.floor(Math.random() * 10).toString(); // Random Number 0-9
+        return char; // Separators or other chars
+    }).join('');
+};
+
+const validateCode = (code: string, pattern: string) => {
+    const upperCode = code.toUpperCase();
+    const upperPattern = pattern.toUpperCase();
+    
+    if (upperCode.length !== upperPattern.length) return false;
+
+    for (let i = 0; i < upperPattern.length; i++) {
+        const pChar = upperPattern[i];
+        const cChar = upperCode[i];
+        
+        if (pChar === 'A') {
+            if (!/[A-Z]/.test(cChar)) return false;
+        } else if (pChar === '1') {
+            if (!/[0-9]/.test(cChar)) return false;
+        } else {
+            if (pChar !== cChar) return false;
+        }
+    }
+    return true;
+};
+
+// --- Document Preview Modal ---
+const DocumentPreviewModal: React.FC<{ doc: PreviewData | null; onClose: () => void }> = ({ doc, onClose }) => {
+    if (!doc) return null;
+
+    return (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/60 backdrop-blur-sm animate-fade-in">
+            <div className="bg-white w-full max-w-5xl h-[85vh] rounded-xl shadow-2xl flex flex-col overflow-hidden">
+                {/* Header */}
+                <div className="flex justify-between items-center px-6 py-4 border-b border-gray-200 bg-gray-50">
+                    <div className="flex items-center gap-3">
+                        <div className="p-2 bg-blue-100 text-blue-600 rounded-lg">
+                            <DocumentTextIcon className="w-6 h-6" />
+                        </div>
+                        <div>
+                            <h3 className="text-lg font-bold text-gray-900 leading-tight">{doc.name}</h3>
+                            <p className="text-xs text-gray-500 font-mono">{doc.code} • v{doc.version}</p>
+                        </div>
+                    </div>
+                    <div className="flex items-center gap-3">
+                        <button className="flex items-center gap-2 px-3 py-1.5 text-xs font-bold text-gray-700 bg-white border border-gray-300 rounded hover:bg-gray-50 transition-colors">
+                            <PrinterIcon className="w-4 h-4" /> Imprimir
+                        </button>
+                        <button className="flex items-center gap-2 px-3 py-1.5 text-xs font-bold text-white bg-blue-600 rounded hover:bg-blue-700 transition-colors shadow-sm">
+                            <ArrowDownIcon className="w-4 h-4" /> Descargar
+                        </button>
+                        <div className="w-px h-6 bg-gray-300 mx-1"></div>
+                        <button onClick={onClose} className="p-2 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-full transition-colors">
+                            <XIcon className="w-6 h-6" />
+                        </button>
+                    </div>
+                </div>
+
+                {/* Content */}
+                <div className="flex flex-1 overflow-hidden">
+                    {/* Sidebar Info */}
+                    <div className="w-72 bg-white border-r border-gray-200 p-6 overflow-y-auto shrink-0">
+                        <h4 className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-4">Detalles del Documento</h4>
+                        
+                        <div className="space-y-5">
+                            <div>
+                                <p className="text-xs text-gray-500 mb-1">Estado Actual</p>
+                                <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-bold border ${
+                                    doc.status === 'current' ? 'bg-green-50 text-green-700 border-green-200' :
+                                    doc.status === 'in_review' ? 'bg-yellow-50 text-yellow-700 border-yellow-200' :
+                                    'bg-red-50 text-red-700 border-red-200'
+                                }`}>
+                                    <span className={`w-1.5 h-1.5 rounded-full ${
+                                        doc.status === 'current' ? 'bg-green-500' :
+                                        doc.status === 'in_review' ? 'bg-yellow-500' : 'bg-red-500'
+                                    }`}></span>
+                                    {doc.status === 'current' ? 'Vigente' : doc.status === 'in_review' ? 'En Revisión' : 'Caducado'}
+                                </span>
+                            </div>
+
+                            <div className="flex items-start gap-3">
+                                <CalendarIcon className="w-4 h-4 text-gray-400 mt-0.5" />
+                                <div>
+                                    <p className="text-xs font-bold text-gray-700">Renovación</p>
+                                    <p className="text-sm text-gray-600">{doc.renewalDate}</p>
+                                </div>
+                            </div>
+
+                            <div className="flex items-start gap-3">
+                                <UserIcon className="w-4 h-4 text-gray-400 mt-0.5" />
+                                <div>
+                                    <p className="text-xs font-bold text-gray-700">Responsable</p>
+                                    <p className="text-sm text-gray-600">{doc.responsible}</p>
+                                </div>
+                            </div>
+
+                            <div className="pt-4 border-t border-gray-100">
+                                <p className="text-xs text-gray-500 mb-1">Procedimiento Padre</p>
+                                <p className="text-xs font-medium text-blue-600">{doc.type}</p>
+                            </div>
+
+                            <div>
+                                <p className="text-xs text-gray-500 mb-1">Nombre de Archivo</p>
+                                <p className="text-xs font-mono text-gray-600 break-all bg-gray-100 p-1.5 rounded">{doc.file}</p>
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Viewer Area */}
+                    <div className="flex-1 bg-gray-100 p-8 flex items-center justify-center overflow-auto relative">
+                        {/* Simulated Paper Document */}
+                        <div className="bg-white shadow-lg w-[595px] min-h-[842px] p-12 text-gray-800 relative transform transition-transform hover:scale-[1.01] origin-top">
+                            {/* Watermark for non-current */}
+                            {doc.status !== 'current' && (
+                                <div className="absolute inset-0 flex items-center justify-center pointer-events-none overflow-hidden">
+                                    <div className="text-red-500 opacity-10 text-9xl font-black -rotate-45 uppercase border-8 border-red-500 p-10 rounded-xl">
+                                        {doc.status === 'expired' ? 'CADUCADO' : 'OBSOLETO'}
+                                    </div>
+                                </div>
+                            )}
+                            
+                            {/* Header Simulation */}
+                            <div className="border-b-2 border-black pb-4 mb-8 flex justify-between items-end">
+                                <div>
+                                    <h1 className="text-2xl font-bold uppercase tracking-tight text-gray-900">{doc.name}</h1>
+                                    <p className="text-sm text-gray-500 mt-1">{doc.type}</p>
+                                </div>
+                                <div className="text-right">
+                                    <div className="border border-black px-2 py-1 text-xs font-mono font-bold">{doc.code}</div>
+                                    <p className="text-xs mt-1">Rev: {doc.version}</p>
+                                </div>
+                            </div>
+
+                            {/* Body Simulation */}
+                            <div className="space-y-4 text-justify text-xs leading-relaxed text-gray-600 font-serif">
+                                <p><strong>1. OBJETIVO</strong></p>
+                                <p>El presente documento tiene como objetivo establecer los lineamientos para la correcta ejecución de las actividades descritas en el título, asegurando el cumplimiento de la normativa ISO 9001:2015 y los estándares internos de calidad.</p>
+                                
+                                <p className="mt-4"><strong>2. ALCANCE</strong></p>
+                                <p>Aplica a todas las áreas operativas involucradas en el proceso de manufactura de la Planta Monterrey.</p>
+
+                                <p className="mt-4"><strong>3. RESPONSABILIDADES</strong></p>
+                                <ul className="list-disc pl-5 space-y-1">
+                                    <li>Gerente de Planta: Aprobar el documento.</li>
+                                    <li>Supervisor de Área: Asegurar la difusión.</li>
+                                    <li>Operadores: Ejecutar conforme a lo descrito.</li>
+                                </ul>
+
+                                <p className="mt-4"><strong>4. DESARROLLO</strong></p>
+                                <p>Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat.</p>
+                                <div className="h-32 bg-gray-100 border border-gray-300 flex items-center justify-center text-gray-400 italic mt-4 mb-4">
+                                    [Diagrama de Flujo del Proceso]
+                                </div>
+                                <p>Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum.</p>
+                            </div>
+
+                            {/* Footer Simulation */}
+                            <div className="absolute bottom-10 left-10 right-10 border-t border-gray-300 pt-2 flex justify-between text-[10px] text-gray-400">
+                                <span>Confidencial - Uso Interno</span>
+                                <span>Página 1 de 1</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    );
+};
 
 // --- Double Confirmation Modal Component ---
 const ConfirmationModal: React.FC<{
@@ -134,7 +320,7 @@ const ConfirmationModal: React.FC<{
     );
 };
 
-const TaProcedures: React.FC<TaProceduresProps> = ({ plants, setPlants }) => {
+const TaProcedures: React.FC<TaProceduresProps> = ({ plants, setPlants, docCodePattern }) => {
     const [expanded, setExpanded] = useState<Record<string, boolean>>({});
     const [showObsolete, setShowObsolete] = useState(false);
     
@@ -142,6 +328,9 @@ const TaProcedures: React.FC<TaProceduresProps> = ({ plants, setPlants }) => {
     const [createModal, setCreateModal] = useState<CreateProcedureModalState>({ isOpen: false, parentId: null, editingId: null });
     const [detailModal, setDetailModal] = useState<DocumentDetailModalState>({ isOpen: false, procedureId: null, documentItem: null });
     const [confirmModal, setConfirmModal] = useState<ActionConfirmationState>({ isOpen: false, step: 1, type: null, parentId: null, procId: null, procTitle: '' });
+    
+    // Preview Modal State
+    const [previewDoc, setPreviewDoc] = useState<PreviewData | null>(null);
 
     // Form Data for creating/editing a Procedure
     const [procForm, setProcForm] = useState<ProcedureFormData>({
@@ -223,7 +412,7 @@ const TaProcedures: React.FC<TaProceduresProps> = ({ plants, setPlants }) => {
         setProcForm({
             title: '', description: '', reviewer: '', responsible: '', 
             notifyEmail: true, notifyWhatsapp: false,
-            newDocuments: [{ code: '', name: '', version: '1.0', renewalDate: '', file: null }] // Start with one row for new
+            newDocuments: [{ code: generateCodeFromPattern(docCodePattern), name: '', version: '1.0', renewalDate: '', file: null }] // Start with one row for new, auto-filled code
         });
         setCreateModal({ isOpen: true, parentId, editingId: null });
     };
@@ -245,7 +434,7 @@ const TaProcedures: React.FC<TaProceduresProps> = ({ plants, setPlants }) => {
     const handleAddDocRow = () => {
         setProcForm(prev => ({
             ...prev,
-            newDocuments: [...prev.newDocuments, { code: '', name: '', version: '1.0', renewalDate: '', file: null }]
+            newDocuments: [...prev.newDocuments, { code: generateCodeFromPattern(docCodePattern), name: '', version: '1.0', renewalDate: '', file: null }]
         }));
     };
 
@@ -270,6 +459,15 @@ const TaProcedures: React.FC<TaProceduresProps> = ({ plants, setPlants }) => {
 
     const handleSaveProcedure = (e: React.FormEvent) => {
         e.preventDefault();
+
+        // VALIDATION CHECK
+        for (const doc of procForm.newDocuments) {
+            if (!validateCode(doc.code, docCodePattern)) {
+                alert(`El código "${doc.code}" no coincide con la estructura requerida: ${docCodePattern}`);
+                return;
+            }
+        }
+
         const newPlants = JSON.parse(JSON.stringify(plants));
 
         if (createModal.editingId) {
@@ -684,7 +882,7 @@ const TaProcedures: React.FC<TaProceduresProps> = ({ plants, setPlants }) => {
                                     <table className="w-full text-sm text-left text-gray-600">
                                         <thead className="text-xs text-gray-500 uppercase bg-gray-50">
                                             <tr>
-                                                <th className="px-3 py-2">Código</th>
+                                                <th className="px-3 py-2 w-40">Código <span className="text-gray-400 font-normal">({docCodePattern})</span></th>
                                                 <th className="px-3 py-2">Documento</th>
                                                 <th className="px-3 py-2">Versión</th>
                                                 <th className="px-3 py-2">Estatus</th>
@@ -779,9 +977,21 @@ const TaProcedures: React.FC<TaProceduresProps> = ({ plants, setPlants }) => {
                                 <p className="text-xs text-gray-700">Renovación: {activeVersion.renewalDate}</p>
                             </div>
                             <div className="flex flex-col gap-2">
-                                <a href="#" className="flex items-center gap-2 bg-white border border-gray-300 text-gray-700 px-3 py-2 rounded hover:bg-gray-50 transition-colors text-sm font-medium">
-                                    <PaperclipIcon className="w-4 h-4"/> {activeVersion.file}
-                                </a>
+                                <button 
+                                    onClick={() => setPreviewDoc({
+                                        name: detailModal.documentItem!.name,
+                                        code: detailModal.documentItem!.code,
+                                        type: currentProcedure?.title || 'Procedimiento',
+                                        version: activeVersion.version,
+                                        status: effectiveStatus!,
+                                        renewalDate: activeVersion.renewalDate,
+                                        responsible: currentProcedure?.responsible || 'N/A',
+                                        file: activeVersion.file
+                                    })}
+                                    className="flex items-center gap-2 bg-white border border-gray-300 text-gray-700 px-3 py-2 rounded hover:bg-gray-50 transition-colors text-sm font-medium w-full text-left"
+                                >
+                                    <PaperclipIcon className="w-4 h-4 text-blue-500"/> {activeVersion.file}
+                                </button>
                                 
                                 {/* REVIEW ACTION BUTTON */}
                                 {effectiveStatus === 'in_review' && isReviewer && (
@@ -848,7 +1058,19 @@ const TaProcedures: React.FC<TaProceduresProps> = ({ plants, setPlants }) => {
                                 </div>
                                 <div className="flex items-center gap-3">
                                         <span className="text-xs text-gray-500">{ver.file}</span>
-                                        <EyeIcon className="w-4 h-4 text-gray-400 cursor-pointer hover:text-gray-600"/>
+                                        <EyeIcon 
+                                            className="w-4 h-4 text-gray-400 cursor-pointer hover:text-gray-600"
+                                            onClick={() => setPreviewDoc({
+                                                name: detailModal.documentItem!.name,
+                                                code: detailModal.documentItem!.code,
+                                                type: currentProcedure?.title || 'Procedimiento',
+                                                version: ver.version,
+                                                status: 'obsolete',
+                                                renewalDate: ver.renewalDate,
+                                                responsible: ver.updatedBy,
+                                                file: ver.file
+                                            })}
+                                        />
                                 </div>
                             </div>
                         ))}
@@ -960,7 +1182,7 @@ const TaProcedures: React.FC<TaProceduresProps> = ({ plants, setPlants }) => {
                                         <table className="w-full text-sm text-left">
                                             <thead className="text-xs text-gray-500 uppercase bg-gray-100">
                                                 <tr>
-                                                    <th className="px-2 py-2 w-24">Código</th>
+                                                    <th className="px-2 py-2 w-40">Código <span className="text-gray-400 font-normal">({docCodePattern})</span></th>
                                                     <th className="px-2 py-2">Nombre Documento</th>
                                                     <th className="px-2 py-2 w-20">Versión</th>
                                                     <th className="px-2 py-2 w-32">F. Renovación</th>
@@ -971,7 +1193,9 @@ const TaProcedures: React.FC<TaProceduresProps> = ({ plants, setPlants }) => {
                                             <tbody>
                                                 {procForm.newDocuments.map((doc, idx) => (
                                                     <tr key={idx} className="border-b border-gray-100">
-                                                        <td className="p-1"><input required type="text" value={doc.code} onChange={e => handleDocRowChange(idx, 'code', e.target.value)} placeholder="Ej. ABC-01" className="w-full px-2 py-1 bg-gray-50 border border-gray-300 rounded text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500 text-xs"/></td>
+                                                        <td className="p-1">
+                                                            <input required type="text" value={doc.code} onChange={e => handleDocRowChange(idx, 'code', e.target.value)} placeholder={docCodePattern} className="w-full px-2 py-1 bg-gray-50 border border-gray-300 rounded text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500 text-xs"/>
+                                                        </td>
                                                         <td className="p-1"><input required type="text" value={doc.name} onChange={e => handleDocRowChange(idx, 'name', e.target.value)} placeholder="Nombre del documento" className="w-full px-2 py-1 bg-gray-50 border border-gray-300 rounded text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500 text-xs"/></td>
                                                         <td className="p-1"><input required type="text" value={doc.version} onChange={e => handleDocRowChange(idx, 'version', e.target.value)} className="w-full px-2 py-1 bg-gray-50 border border-gray-300 rounded text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500 text-xs text-center"/></td>
                                                         <td className="p-1"><input required type="date" value={doc.renewalDate} onChange={e => handleDocRowChange(idx, 'renewalDate', e.target.value)} className="w-full px-2 py-1 bg-gray-50 border border-gray-300 rounded text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500 text-xs"/></td>
@@ -1022,6 +1246,12 @@ const TaProcedures: React.FC<TaProceduresProps> = ({ plants, setPlants }) => {
                 onClose={() => setConfirmModal({ ...confirmModal, isOpen: false })}
                 onNextStep={handleNextStepConfirmation}
                 onConfirm={handleFinalExecuteAction}
+            />
+
+            {/* PREVIEW MODAL */}
+            <DocumentPreviewModal 
+                doc={previewDoc} 
+                onClose={() => setPreviewDoc(null)} 
             />
 
              <style>{`

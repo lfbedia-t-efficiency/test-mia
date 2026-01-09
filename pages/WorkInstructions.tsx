@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useMemo } from 'react';
 import { Plant, Process, Subprocess } from '../types';
 import { 
@@ -22,7 +23,7 @@ interface InstructionStep {
     id: number;
     title: string;
     description: string;
-    mediaUrls: string[]; 
+    media: { type: 'image' | 'video'; url: string }[]; 
     qualityCheck?: string;
     safetyRisk?: string;
     troubleshooting?: string;
@@ -68,6 +69,7 @@ interface AssignedTask {
     urgency: 'U1' | 'U2' | 'U3';
     assignedTo: string;
     assignedAt: string; // ISO Date
+    startedAt?: string; // ISO Date (When execution began)
     dueDate: string; // ISO Date
     status: 'pending' | 'in_progress' | 'completed';
     result?: 'pass' | 'fail';
@@ -119,20 +121,20 @@ const generateMockInstructions = (plants: Plant[]): WorkInstruction[] => {
                                 title: 'Preparación de Área', 
                                 description: 'Verificar que el área esté limpia y libre de obstáculos. Confirmar que todas las herramientas estén calibradas.',
                                 safetyRisk: 'Riesgo de tropiezo',
-                                mediaUrls: [`https://picsum.photos/seed/step1-${i}/800/600`]
+                                media: [{ type: 'image', url: `https://picsum.photos/seed/step1-${i}/800/600` }]
                             },
                             { 
                                 id: 2, 
                                 title: 'Montaje de Componente', 
                                 description: 'Colocar el componente A sobre la base B alineando los pines guía. Aplicar presión suave hasta escuchar un clic.',
                                 qualityCheck: 'Verificar holgura < 1mm',
-                                mediaUrls: [`https://picsum.photos/seed/step2-${i}/800/600`, `https://picsum.photos/seed/step2b-${i}/800/600`]
+                                media: [{ type: 'image', url: `https://picsum.photos/seed/step2-${i}/800/600` }, { type: 'image', url: `https://picsum.photos/seed/step2b-${i}/800/600` }]
                             },
                             { 
                                 id: 3, 
                                 title: 'Validación Final', 
                                 description: 'Escanear el código QR del ensamble terminado para registrar la producción en el sistema MES.',
-                                mediaUrls: [`https://picsum.photos/seed/step3-${i}/800/600`]
+                                media: [{ type: 'image', url: `https://picsum.photos/seed/step3-${i}/800/600` }]
                             }
                         ],
                         expectedResult: {
@@ -166,6 +168,10 @@ const generateMockAssignedTasks = (instructions: WorkInstruction[]): AssignedTas
         const assignedAt = new Date(now.getTime() - Math.floor(Math.random() * 10 * 24 * 60 * 60 * 1000));
         const dueDate = new Date(assignedAt.getTime() + 24 * 60 * 60 * 1000);
         const isCompleted = Math.random() > 0.4;
+        
+        // Simulating start/end times
+        const startedAt = new Date(assignedAt.getTime() + Math.random() * 2 * 3600000); 
+        const completionTime = isCompleted ? new Date(startedAt.getTime() + Math.random() * 4 * 3600000).toISOString() : undefined;
 
         tasks.push({
             id: `task-${i}`,
@@ -174,16 +180,32 @@ const generateMockAssignedTasks = (instructions: WorkInstruction[]): AssignedTas
             urgency: urgencies[Math.floor(Math.random() * urgencies.length)],
             assignedTo: users[Math.floor(Math.random() * users.length)],
             assignedAt: assignedAt.toISOString(),
+            startedAt: isCompleted || Math.random() > 0.5 ? startedAt.toISOString() : undefined,
             dueDate: dueDate.toISOString(),
             status: isCompleted ? 'completed' : (Math.random() > 0.5 ? 'in_progress' : 'pending'),
             result: isCompleted ? (Math.random() > 0.1 ? 'pass' : 'fail') : undefined,
-            completionTime: isCompleted ? new Date(assignedAt.getTime() + Math.random() * 4 * 3600000).toISOString() : undefined,
+            completionTime: completionTime,
             machineContext: `Máquina ${['A', 'B', 'C'][Math.floor(Math.random()*3)]}-${Math.floor(Math.random()*10)}`,
             timeEst: instr.estimatedTime
         });
     }
     return tasks.sort((a,b) => new Date(b.assignedAt).getTime() - new Date(a.assignedAt).getTime());
 }
+
+// --- HELPERS ---
+
+const formatElapsedTime = (ms: number) => {
+    if (ms < 0) ms = 0;
+    const totalSeconds = Math.floor(ms / 1000);
+    const hours = Math.floor(totalSeconds / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    const seconds = totalSeconds % 60;
+
+    const pad = (n: number) => n.toString().padStart(2, '0');
+    const padHours = (n: number) => n.toString().padStart(3, '0');
+
+    return `${padHours(hours)}:${pad(minutes)}:${pad(seconds)}`;
+};
 
 // --- SUB-COMPONENTS ---
 
@@ -227,47 +249,20 @@ const AssignInstructionModal: React.FC<AssignModalProps> = ({ isOpen, onClose, i
     const [priority, setPriority] = useState('P3');
     const [urgency, setUrgency] = useState('U3');
     const [assignTo, setAssignTo] = useState('');
-    const [hours, setHours] = useState(0);
-    const [minutes, setMinutes] = useState(30);
     const [machine, setMachine] = useState('');
 
     const selectedInstr = instructions.find(i => i.id === selectedId);
-
-    useEffect(() => {
-        if(selectedInstr) {
-            // Parsing existing estimated time like "45 min"
-            const timeStr = selectedInstr.estimatedTime || "";
-            const match = timeStr.match(/(\d+)/);
-            if (match) {
-                const total = parseInt(match[0], 10);
-                if (total >= 60) {
-                    setHours(Math.floor(total / 60));
-                    setMinutes(total % 60);
-                } else {
-                    setHours(0);
-                    setMinutes(total);
-                }
-            } else {
-                setHours(0);
-                setMinutes(30);
-            }
-        } else {
-            setHours(0);
-            setMinutes(0);
-        }
-    }, [selectedInstr]);
 
     if (!isOpen) return null;
 
     const handleSubmit = (e: React.FormEvent) => {
         e.preventDefault();
-        const timeEst = `${hours > 0 ? `${hours}h ` : ''}${minutes}m`;
         onAssign({
             instruction: selectedInstr,
             priority,
             urgency,
             assignTo,
-            timeEst,
+            timeEst: selectedInstr?.estimatedTime,
             machine
         });
         onClose();
@@ -296,36 +291,9 @@ const AssignInstructionModal: React.FC<AssignModalProps> = ({ isOpen, onClose, i
                         </select>
                     </div>
                     
-                    <div className="grid grid-cols-2 gap-4">
-                        <div>
-                            <label className="block text-xs font-bold text-gray-700 mb-1">Código (Automático)</label>
-                            <input disabled value={selectedInstr?.code || ''} className="w-full p-2 border border-gray-200 bg-gray-100 rounded text-sm text-gray-500 font-mono" />
-                        </div>
-                        <div>
-                            <label className="block text-xs font-bold text-gray-700 mb-1">Tiempo Estimado</label>
-                            <div className="flex gap-2">
-                                <div className="relative flex-1">
-                                    <select 
-                                        value={hours} 
-                                        onChange={e => setHours(Number(e.target.value))}
-                                        className="w-full p-2 border border-gray-300 rounded text-sm bg-white appearance-none"
-                                    >
-                                        {Array.from({length: 13}, (_, i) => <option key={i} value={i}>{i}</option>)}
-                                    </select>
-                                    <span className="absolute right-3 top-2 text-xs text-gray-500 pointer-events-none font-bold">h</span>
-                                </div>
-                                <div className="relative flex-1">
-                                    <select 
-                                        value={minutes} 
-                                        onChange={e => setMinutes(Number(e.target.value))}
-                                        className="w-full p-2 border border-gray-300 rounded text-sm bg-white appearance-none"
-                                    >
-                                        {Array.from({length: 12}, (_, i) => i * 5).map(m => <option key={m} value={m}>{m}</option>)}
-                                    </select>
-                                    <span className="absolute right-3 top-2 text-xs text-gray-500 pointer-events-none font-bold">m</span>
-                                </div>
-                            </div>
-                        </div>
+                    <div>
+                        <label className="block text-xs font-bold text-gray-700 mb-1">Código (Automático)</label>
+                        <input disabled value={selectedInstr?.code || ''} className="w-full p-2 border border-gray-200 bg-gray-100 rounded text-sm text-gray-500 font-mono" />
                     </div>
 
                     <div className="grid grid-cols-2 gap-4">
@@ -549,7 +517,13 @@ const ResultsDashboard: React.FC<{ tasks: AssignedTask[] }> = ({ tasks }) => {
                             </tr>
                         </thead>
                         <tbody className="divide-y divide-gray-100">
-                            {tasks.filter(t => t.status === 'completed').map(task => (
+                            {tasks.filter(t => t.status === 'completed').map(task => {
+                                const durationMs = task.startedAt && task.completionTime 
+                                    ? new Date(task.completionTime).getTime() - new Date(task.startedAt).getTime()
+                                    : 0;
+                                const durationStr = formatElapsedTime(durationMs);
+
+                                return (
                                 <tr key={task.id} className="hover:bg-gray-50">
                                     <td className="p-3 text-xs text-gray-600">
                                         {task.completionTime ? new Date(task.completionTime).toLocaleDateString() : '-'}
@@ -580,14 +554,200 @@ const ResultsDashboard: React.FC<{ tasks: AssignedTask[] }> = ({ tasks }) => {
                                         )}
                                     </td>
                                     <td className="p-3 text-center text-xs font-mono text-gray-600">
-                                        {Math.floor(Math.random() * 45 + 15)}m
+                                        {durationStr}
                                     </td>
                                 </tr>
-                            ))}
+                            )})}
                             {tasks.filter(t => t.status === 'completed').length === 0 && (
                                 <tr>
                                     <td colSpan={6} className="text-center py-8 text-gray-400">
                                         No hay historial de instrucciones completadas.
+                                    </td>
+                                </tr>
+                            )}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    );
+};
+
+// --- NEW ASSIGNMENTS DASHBOARD ---
+const ActiveAssignmentsDashboard: React.FC<{ 
+    tasks: AssignedTask[], 
+    plants: Plant[],
+    onStartTask: (taskId: string) => void,
+    onOpenTask: (task: AssignedTask) => void
+}> = ({ tasks, plants, onStartTask, onOpenTask }) => {
+    // Filters
+    const [plantId, setPlantId] = useState('');
+    const [processId, setProcessId] = useState('');
+    const [subprocessId, setSubprocessId] = useState('');
+    const [user, setUser] = useState('');
+
+    // Unique users for filter
+    const users = Array.from(new Set(tasks.map(t => t.assignedTo)));
+
+    const availableProcesses = plants.find(p => p.id === plantId)?.processes || [];
+    const availableSubprocesses = availableProcesses.find(p => p.id === processId)?.subprocesses || [];
+
+    const filteredTasks = useMemo(() => {
+        return tasks.filter(t => {
+            if (t.status === 'completed') return false; // Only show active
+            
+            const matchPlant = !plantId || t.workInstruction.plantId === plantId;
+            const matchProcess = !processId || t.workInstruction.processId === processId;
+            const matchSubprocess = !subprocessId || t.workInstruction.subprocessId === subprocessId;
+            const matchUser = !user || t.assignedTo === user;
+
+            return matchPlant && matchProcess && matchSubprocess && matchUser;
+        });
+    }, [tasks, plantId, processId, subprocessId, user]);
+
+    return (
+        <div className="space-y-6 animate-fade-in flex flex-col h-full">
+            {/* Filters Bar */}
+            <div className="bg-white p-4 rounded-lg shadow-sm border border-gray-200 flex flex-wrap gap-3 items-end">
+                <div className="flex items-center gap-2 text-gray-500 mr-2 pb-2">
+                    <FilterIcon className="w-5 h-5"/>
+                    <span className="text-sm font-bold">Filtros</span>
+                </div>
+                <div>
+                    <label className="text-[10px] font-bold text-gray-400 uppercase block mb-1">Planta</label>
+                    <select value={plantId} onChange={e => {setPlantId(e.target.value); setProcessId(''); setSubprocessId('');}} className="p-2 border border-gray-300 rounded text-xs bg-white w-40">
+                        <option value="">Todas</option>
+                        {plants.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                    </select>
+                </div>
+                <div>
+                    <label className="text-[10px] font-bold text-gray-400 uppercase block mb-1">Proceso</label>
+                    <select value={processId} onChange={e => {setProcessId(e.target.value); setSubprocessId('');}} className="p-2 border border-gray-300 rounded text-xs bg-white w-40" disabled={!plantId}>
+                        <option value="">Todos</option>
+                        {availableProcesses.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+                    </select>
+                </div>
+                <div>
+                    <label className="text-[10px] font-bold text-gray-400 uppercase block mb-1">Subproceso</label>
+                    <select value={subprocessId} onChange={e => setSubprocessId(e.target.value)} className="p-2 border border-gray-300 rounded text-xs bg-white w-40" disabled={!processId}>
+                        <option value="">Todos</option>
+                        {availableSubprocesses.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                    </select>
+                </div>
+                <div>
+                    <label className="text-[10px] font-bold text-gray-400 uppercase block mb-1">Persona</label>
+                    <select value={user} onChange={e => setUser(e.target.value)} className="p-2 border border-gray-300 rounded text-xs bg-white w-40">
+                        <option value="">Todas</option>
+                        {users.map(u => <option key={u} value={u}>{u}</option>)}
+                    </select>
+                </div>
+                <div className="ml-auto pb-1 text-xs text-gray-500">
+                    Mostrando <span className="font-bold text-blue-600">{filteredTasks.length}</span> asignaciones pendientes
+                </div>
+            </div>
+
+            {/* Tasks Table */}
+            <div className="flex-1 bg-white border border-gray-200 rounded-lg shadow-sm overflow-hidden flex flex-col">
+                <div className="p-4 border-b border-gray-200 bg-gray-50">
+                    <h3 className="font-bold text-gray-800 text-sm uppercase flex items-center gap-2">
+                        <ClipboardDocumentCheckIcon className="w-4 h-4 text-blue-600"/> Tablero de Control de Instrucciones
+                    </h3>
+                </div>
+                <div className="flex-1 overflow-y-auto custom-scrollbar">
+                    <table className="w-full text-left text-sm whitespace-nowrap">
+                        <thead className="bg-white text-gray-500 font-bold text-xs uppercase border-b border-gray-200 sticky top-0 z-10">
+                            <tr>
+                                <th className="p-3">Instrucción</th>
+                                <th className="p-3">Ubicación (Proceso)</th>
+                                <th className="p-3">Contexto Máquina</th>
+                                <th className="p-3">Asignado a</th>
+                                <th className="p-3">Fecha Límite</th>
+                                <th className="p-3 w-32">Avance</th>
+                                <th className="p-3 text-center">Estado</th>
+                                <th className="p-3 text-center">Acciones</th>
+                            </tr>
+                        </thead>
+                        <tbody className="divide-y divide-gray-100">
+                            {filteredTasks.length > 0 ? filteredTasks.map(task => {
+                                const plantName = plants.find(p => p.id === task.workInstruction.plantId)?.name || 'Planta';
+                                const procName = plants.find(p => p.id === task.workInstruction.plantId)?.processes.find(pr => pr.id === task.workInstruction.processId)?.name || 'Proceso';
+                                
+                                // Mock progress based on status
+                                const progress = task.status === 'in_progress' ? 60 : 0; 
+
+                                return (
+                                    <tr key={task.id} className="hover:bg-blue-50 transition-colors">
+                                        <td className="p-3">
+                                            <div className="font-bold text-blue-700 text-xs">{task.workInstruction.code}</div>
+                                            <div className="text-xs text-gray-700 font-semibold truncate w-48" title={task.workInstruction.title}>{task.workInstruction.title}</div>
+                                        </td>
+                                        <td className="p-3 text-xs text-gray-500">
+                                            <div className="font-medium">{plantName}</div>
+                                            <div className="text-[10px]">{procName}</div>
+                                        </td>
+                                        <td className="p-3 text-xs text-gray-600 font-mono">
+                                            {task.machineContext}
+                                        </td>
+                                        <td className="p-3 text-xs">
+                                            <div className="flex items-center gap-2">
+                                                <div className="w-6 h-6 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center text-[10px] font-bold border border-blue-200">
+                                                    {task.assignedTo.charAt(0)}
+                                                </div>
+                                                <span className="font-medium text-gray-700">{task.assignedTo}</span>
+                                            </div>
+                                        </td>
+                                        <td className="p-3 text-xs text-gray-600">
+                                            <div className="flex items-center gap-1">
+                                                <CalendarIcon className="w-3 h-3 text-gray-400"/>
+                                                {new Date(task.dueDate).toLocaleDateString()}
+                                            </div>
+                                        </td>
+                                        <td className="p-3">
+                                            <div className="w-full bg-gray-200 rounded-full h-2 overflow-hidden">
+                                                <div className={`h-full rounded-full ${progress > 0 ? 'bg-blue-500' : 'bg-gray-300'}`} style={{width: `${progress}%`}}></div>
+                                            </div>
+                                            <div className="text-[10px] text-right text-gray-500 mt-0.5">{progress}%</div>
+                                        </td>
+                                        <td className="p-3 text-center">
+                                            {task.status === 'in_progress' ? (
+                                                <span className="inline-flex items-center gap-1 bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full text-[10px] font-bold border border-blue-200">
+                                                    <ClockIcon className="w-3 h-3"/> En Proceso
+                                                </span>
+                                            ) : (
+                                                <span className="inline-flex items-center gap-1 bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full text-[10px] font-bold border border-gray-200">
+                                                    <ClockIcon className="w-3 h-3"/> Pendiente
+                                                </span>
+                                            )}
+                                        </td>
+                                        <td className="p-3 text-center">
+                                            <div className="flex items-center justify-center gap-2">
+                                                {task.status === 'pending' && (
+                                                    <button 
+                                                        onClick={() => onStartTask(task.id)}
+                                                        className="flex items-center gap-1 bg-blue-600 hover:bg-blue-700 text-white text-[10px] font-bold py-1 px-2 rounded transition-colors shadow-sm"
+                                                        title="Iniciar Instrucción"
+                                                    >
+                                                        <PlayIcon className="w-3 h-3" /> Iniciar
+                                                    </button>
+                                                )}
+                                                <button 
+                                                    onClick={() => onOpenTask(task)}
+                                                    className="flex items-center gap-1 bg-white border border-gray-300 hover:bg-gray-50 text-gray-700 text-[10px] font-bold py-1 px-2 rounded transition-colors shadow-sm"
+                                                    title="Abrir Instrucción"
+                                                >
+                                                    <EyeIcon className="w-3 h-3 text-indigo-600" /> Abrir
+                                                </button>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                );
+                            }) : (
+                                <tr>
+                                    <td colSpan={8} className="text-center py-10 text-gray-400">
+                                        <div className="flex flex-col items-center">
+                                            <ClipboardDocumentCheckIcon className="w-8 h-8 mb-2 opacity-50"/>
+                                            <p>No hay asignaciones pendientes con estos filtros.</p>
+                                        </div>
                                     </td>
                                 </tr>
                             )}
@@ -659,6 +819,8 @@ interface WizardProps {
     onClose: () => void;
     plants: Plant[];
     onSave: (data: WorkInstruction) => void;
+    nextCode: string; // New prop
+    initialData?: WorkInstruction | null;
 }
 
 interface WizardFormState {
@@ -678,14 +840,15 @@ interface WizardFormState {
     resVisuals: string[];
     resValidation: boolean;
     resTime: boolean;
+    estimatedTime: string; // New field
 }
 
-const CreateWizardModal: React.FC<WizardProps> = ({ isOpen, onClose, plants, onSave }) => {
+const CreateWizardModal: React.FC<WizardProps> = ({ isOpen, onClose, plants, onSave, nextCode, initialData }) => {
     const [currentStep, setCurrentStep] = useState(1);
     const totalSteps = 4;
 
-    const [formData, setFormData] = useState<WizardFormState>({
-        code: `INS-${Math.floor(Math.random() * 10000)}`,
+    const initialFormData: WizardFormState = {
+        code: nextCode,
         title: '',
         description: '',
         creator: 'Usuario Actual',
@@ -700,8 +863,45 @@ const CreateWizardModal: React.FC<WizardProps> = ({ isOpen, onClose, plants, onS
         resDescription: '',
         resVisuals: [],
         resValidation: false,
-        resTime: false
-    });
+        resTime: false,
+        estimatedTime: '' // Initialize new field
+    };
+
+    const [formData, setFormData] = useState<WizardFormState>(initialFormData);
+
+    // Reset form when modal opens or nextCode changes
+    useEffect(() => {
+        if (isOpen) {
+            if (initialData) {
+                // Populate from existing
+                setFormData({
+                    code: initialData.code,
+                    title: initialData.title,
+                    description: initialData.objective,
+                    creator: initialData.creator,
+                    plantId: initialData.plantId,
+                    processId: initialData.processId,
+                    subprocessId: initialData.subprocessId,
+                    toolsStr: initialData.tools.join('\n'),
+                    suppliesStr: initialData.supplies.join('\n'),
+                    skillsStr: initialData.skills.join('\n'),
+                    steps: initialData.steps,
+                    resTitle: initialData.expectedResult?.title || '',
+                    resDescription: initialData.expectedResult?.description || '',
+                    resVisuals: initialData.expectedResult?.visualUrls || [],
+                    resValidation: initialData.expectedResult?.requiresValidation || false,
+                    resTime: initialData.expectedResult?.requiresTime || false,
+                    estimatedTime: initialData.estimatedTime.replace(' min', '')
+                });
+            } else {
+                setFormData({
+                    ...initialFormData,
+                    code: nextCode // Use sequential code
+                });
+            }
+            setCurrentStep(1);
+        }
+    }, [isOpen, nextCode, initialData]);
 
     if (!isOpen) return null;
 
@@ -714,7 +914,7 @@ const CreateWizardModal: React.FC<WizardProps> = ({ isOpen, onClose, plants, onS
 
     const addStep = () => {
         const nextId = formData.steps.length + 1;
-        setFormData(prev => ({ ...prev, steps: [...prev.steps, { id: nextId, title: '', description: '', mediaUrls: [] }] }));
+        setFormData(prev => ({ ...prev, steps: [...prev.steps, { id: nextId, title: '', description: '', media: [] }] }));
     };
 
     const updateStep = (index: number, field: keyof InstructionStep, value: any) => {
@@ -726,15 +926,19 @@ const CreateWizardModal: React.FC<WizardProps> = ({ isOpen, onClose, plants, onS
 
     const addStepImages = (index: number, files: FileList | null) => {
         if (!files) return;
-        const newUrls = Array.from(files).map(f => URL.createObjectURL(f));
+        const newMedia = Array.from(files).map(f => ({
+            url: URL.createObjectURL(f),
+            type: f.type.startsWith('video/') ? 'video' : 'image'
+        })) as { type: 'image' | 'video'; url: string }[];
+        
         const newSteps = [...formData.steps];
-        newSteps[index].mediaUrls = [...newSteps[index].mediaUrls, ...newUrls];
+        newSteps[index].media = [...newSteps[index].media, ...newMedia];
         setFormData(prev => ({ ...prev, steps: newSteps }));
     };
 
     const removeStepImage = (stepIndex: number, imgIndex: number) => {
         const newSteps = [...formData.steps];
-        newSteps[stepIndex].mediaUrls = newSteps[stepIndex].mediaUrls.filter((_, i) => i !== imgIndex);
+        newSteps[stepIndex].media = newSteps[stepIndex].media.filter((_, i) => i !== imgIndex);
         setFormData(prev => ({ ...prev, steps: newSteps }));
     };
 
@@ -756,7 +960,7 @@ const CreateWizardModal: React.FC<WizardProps> = ({ isOpen, onClose, plants, onS
 
     const handleFinalSave = () => {
         const newInstruction: WorkInstruction = {
-            id: `wi-new-${Date.now()}`,
+            id: initialData ? initialData.id : `wi-new-${Date.now()}`,
             code: formData.code,
             title: formData.title,
             objective: formData.description,
@@ -767,7 +971,7 @@ const CreateWizardModal: React.FC<WizardProps> = ({ isOpen, onClose, plants, onS
             subprocessId: formData.subprocessId,
             lastUpdated: new Date().toLocaleDateString(),
             creator: formData.creator,
-            estimatedTime: 'N/A',
+            estimatedTime: formData.estimatedTime ? `${formData.estimatedTime} min` : 'N/A',
             tools: formData.toolsStr.split('\n').filter(s => s.trim()),
             supplies: formData.suppliesStr.split('\n').filter(s => s.trim()),
             skills: formData.skillsStr.split('\n').filter(s => s.trim()),
@@ -784,6 +988,25 @@ const CreateWizardModal: React.FC<WizardProps> = ({ isOpen, onClose, plants, onS
         onSave(newInstruction);
     };
 
+    const canProceedToNextStep = () => {
+        if (currentStep === 1) {
+            // Strict validation: Title, Description, Time, Tools, Supplies, Skills required.
+            return formData.title.trim() !== '' && 
+                   formData.estimatedTime !== '' && 
+                   formData.description.trim() !== '' &&
+                   formData.toolsStr.trim() !== '' &&
+                   formData.suppliesStr.trim() !== '' &&
+                   formData.skillsStr.trim() !== '';
+        }
+        if (currentStep === 3) {
+            // Strict validation: Title, Description, and at least one Visual required.
+            return formData.resTitle.trim() !== '' &&
+                   formData.resDescription.trim() !== '' &&
+                   formData.resVisuals.length > 0;
+        }
+        return true;
+    };
+
     const renderStepContent = () => {
         switch(currentStep) {
             case 1:
@@ -793,31 +1016,47 @@ const CreateWizardModal: React.FC<WizardProps> = ({ isOpen, onClose, plants, onS
                             <span className="text-sm text-blue-800 font-bold">Código Asignado: {formData.code}</span>
                             <span className="text-xs text-blue-600">Creador: {formData.creator}</span>
                         </div>
-                        <div>
-                            <label className="block text-xs font-bold text-gray-700 mb-1">Nombre de la instrucción</label>
-                            <input type="text" className="w-full p-2 border border-gray-300 rounded text-sm bg-white" value={formData.title} onChange={e => updateField('title', e.target.value)} placeholder="Ej. Ensamble de Motor"/>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <div>
+                                <label className="block text-xs font-bold text-gray-700 mb-1">Nombre de la instrucción <span className="text-red-500">*</span></label>
+                                <input type="text" className="w-full p-2 border border-gray-300 rounded text-sm bg-white" value={formData.title} onChange={e => updateField('title', e.target.value)} placeholder="Ej. Ensamble de Motor"/>
+                            </div>
+                            <div>
+                                <label className="block text-xs font-bold text-gray-700 mb-1">Tiempo Estimado (minutos) <span className="text-red-500">*</span></label>
+                                <div className="relative">
+                                    <input 
+                                        type="number" 
+                                        min="0"
+                                        className="w-full p-2 border border-gray-300 rounded text-sm bg-white pr-8" 
+                                        value={formData.estimatedTime} 
+                                        onChange={e => updateField('estimatedTime', e.target.value)} 
+                                        placeholder="Ej. 45"
+                                    />
+                                    <span className="absolute right-3 top-2 text-xs text-gray-500 font-bold pointer-events-none">min</span>
+                                </div>
+                            </div>
                         </div>
                         <div>
-                            <label className="block text-xs font-bold text-gray-700 mb-1">Descripción</label>
+                            <label className="block text-xs font-bold text-gray-700 mb-1">Descripción / Objetivo <span className="text-red-500">*</span></label>
                             <textarea className="w-full p-2 border border-gray-300 rounded text-sm bg-white" rows={2} value={formData.description} onChange={e => updateField('description', e.target.value)} placeholder="Propósito de la instrucción..."/>
                         </div>
                         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                             <div>
-                                <label className="block text-xs font-bold text-gray-700 mb-1">Planta</label>
+                                <label className="block text-xs font-bold text-gray-700 mb-1">Planta <span className="text-gray-400 font-normal">(Opcional)</span></label>
                                 <select className="w-full p-2 border rounded text-sm bg-white" value={formData.plantId} onChange={e => updateField('plantId', e.target.value)}>
                                     <option value="">Seleccionar...</option>
                                     {plants.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
                                 </select>
                             </div>
                             <div>
-                                <label className="block text-xs font-bold text-gray-700 mb-1">Proceso</label>
+                                <label className="block text-xs font-bold text-gray-700 mb-1">Proceso <span className="text-gray-400 font-normal">(Opcional)</span></label>
                                 <select className="w-full p-2 border rounded text-sm bg-white" value={formData.processId} onChange={e => updateField('processId', e.target.value)} disabled={!formData.plantId}>
                                     <option value="">Seleccionar...</option>
                                     {processes.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
                                 </select>
                             </div>
                             <div>
-                                <label className="block text-xs font-bold text-gray-700 mb-1">Subproceso</label>
+                                <label className="block text-xs font-bold text-gray-700 mb-1">Subproceso <span className="text-gray-400 font-normal">(Opcional)</span></label>
                                 <select className="w-full p-2 border rounded text-sm bg-white" value={formData.subprocessId} onChange={e => updateField('subprocessId', e.target.value)} disabled={!formData.processId}>
                                     <option value="">Seleccionar...</option>
                                     {subprocesses.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
@@ -825,9 +1064,9 @@ const CreateWizardModal: React.FC<WizardProps> = ({ isOpen, onClose, plants, onS
                             </div>
                         </div>
                         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                            <div><label className="block text-xs font-bold text-gray-700 mb-1">Herramientas Necesarias</label><textarea className="w-full p-2 border border-gray-300 rounded text-sm bg-white" rows={3} value={formData.toolsStr} onChange={e => updateField('toolsStr', e.target.value)} placeholder="Una por línea..."/></div>
-                            <div><label className="block text-xs font-bold text-gray-700 mb-1">Insumos Necesarios</label><textarea className="w-full p-2 border border-gray-300 rounded text-sm bg-white" rows={3} value={formData.suppliesStr} onChange={e => updateField('suppliesStr', e.target.value)} placeholder="Una por línea..."/></div>
-                            <div><label className="block text-xs font-bold text-gray-700 mb-1">Habilidades Requeridas</label><textarea className="w-full p-2 border border-gray-300 rounded text-sm bg-white" rows={3} value={formData.skillsStr} onChange={e => updateField('skillsStr', e.target.value)} placeholder="Una por línea..."/></div>
+                            <div><label className="block text-xs font-bold text-gray-700 mb-1">Herramientas Necesarias <span className="text-red-500">*</span></label><textarea className="w-full p-2 border border-gray-300 rounded text-sm bg-white" rows={3} value={formData.toolsStr} onChange={e => updateField('toolsStr', e.target.value)} placeholder="Una por línea..."/></div>
+                            <div><label className="block text-xs font-bold text-gray-700 mb-1">Insumos Necesarios <span className="text-red-500">*</span></label><textarea className="w-full p-2 border border-gray-300 rounded text-sm bg-white" rows={3} value={formData.suppliesStr} onChange={e => updateField('suppliesStr', e.target.value)} placeholder="Una por línea..."/></div>
+                            <div><label className="block text-xs font-bold text-gray-700 mb-1">Habilidades Requeridas <span className="text-red-500">*</span></label><textarea className="w-full p-2 border border-gray-300 rounded text-sm bg-white" rows={3} value={formData.skillsStr} onChange={e => updateField('skillsStr', e.target.value)} placeholder="Una por línea..."/></div>
                         </div>
                     </div>
                 );
@@ -847,13 +1086,24 @@ const CreateWizardModal: React.FC<WizardProps> = ({ isOpen, onClose, plants, onS
                                         <textarea rows={2} placeholder="Descripción detallada del paso..." value={step.description} onChange={e => updateStep(idx, 'description', e.target.value)} className="w-full text-xs p-2 bg-white rounded border border-gray-200 focus:ring-1 focus:ring-blue-500" />
                                         <div>
                                             <div className="flex flex-wrap gap-2 mb-2">
-                                                {step.mediaUrls.map((url, imgIdx) => (
-                                                    <div key={imgIdx} className="relative w-20 h-20 border rounded overflow-hidden group">
-                                                        <img src={url} alt="" className="w-full h-full object-cover" />
+                                                {step.media.map((item, imgIdx) => (
+                                                    <div key={imgIdx} className="relative w-20 h-20 border rounded overflow-hidden group bg-gray-100 flex items-center justify-center">
+                                                        {item.type === 'video' ? (
+                                                            <div className="w-full h-full flex flex-col items-center justify-center text-gray-500">
+                                                                <PlayIcon className="w-6 h-6"/>
+                                                                <span className="text-[9px] font-bold">VIDEO</span>
+                                                            </div>
+                                                        ) : (
+                                                            <img src={item.url} alt="" className="w-full h-full object-cover" />
+                                                        )}
                                                         <button onClick={() => removeStepImage(idx, imgIdx)} className="absolute top-0 right-0 bg-red-500 text-white p-0.5 rounded-bl opacity-0 group-hover:opacity-100 transition-opacity"><XIcon className="w-3 h-3"/></button>
                                                     </div>
                                                 ))}
-                                                <label className="w-20 h-20 border-2 border-dashed border-gray-300 rounded flex flex-col items-center justify-center cursor-pointer hover:bg-gray-50 text-xs text-gray-500"><PlusCircleIcon className="w-5 h-5 mb-1"/>Add<input type="file" multiple className="hidden" onChange={e => addStepImages(idx, e.target.files)} /></label>
+                                                <label className="w-20 h-20 border-2 border-dashed border-gray-300 rounded flex flex-col items-center justify-center cursor-pointer hover:bg-gray-50 text-xs text-gray-500">
+                                                    <PlusCircleIcon className="w-5 h-5 mb-1"/>
+                                                    Add
+                                                    <input type="file" multiple accept="image/*,video/*" className="hidden" onChange={e => addStepImages(idx, e.target.files)} />
+                                                </label>
                                             </div>
                                         </div>
                                     </div>
@@ -867,12 +1117,12 @@ const CreateWizardModal: React.FC<WizardProps> = ({ isOpen, onClose, plants, onS
                 return (
                     <div className="space-y-6 animate-fade-in">
                         <div className="bg-white p-4 rounded-lg border border-gray-200 shadow-sm">
-                            <h4 className="font-bold text-gray-800 mb-4 border-b pb-2">Documento de Referencia Final</h4>
+                            <h4 className="font-bold text-gray-800 mb-4 border-b pb-2">Resultado de Referencia Final</h4>
                             <div className="space-y-4">
-                                <div><label className="block text-xs font-bold text-gray-700 mb-1">Título del Paso Final</label><input type="text" value={formData.resTitle} onChange={e => updateField('resTitle', e.target.value)} className="w-full p-2 border border-gray-300 rounded text-sm bg-white"/></div>
-                                <div><label className="block text-xs font-bold text-gray-700 mb-1">Descripción del Resultado</label><textarea rows={4} value={formData.resDescription} onChange={e => updateField('resDescription', e.target.value)} className="w-full p-2 border border-gray-300 rounded text-sm bg-white" placeholder="Describa el estado final aceptable..."/></div>
+                                <div><label className="block text-xs font-bold text-gray-700 mb-1">Título del Paso Final <span className="text-red-500">*</span></label><input type="text" value={formData.resTitle} onChange={e => updateField('resTitle', e.target.value)} className="w-full p-2 border border-gray-300 rounded text-sm bg-white"/></div>
+                                <div><label className="block text-xs font-bold text-gray-700 mb-1">Descripción del Resultado <span className="text-red-500">*</span></label><textarea rows={4} value={formData.resDescription} onChange={e => updateField('resDescription', e.target.value)} className="w-full p-2 border border-gray-300 rounded text-sm bg-white" placeholder="Describa el estado final aceptable..."/></div>
                                 <div>
-                                    <label className="block text-xs font-bold text-gray-700 mb-2">Descriptivo Visual (Golden Samples)</label>
+                                    <label className="block text-xs font-bold text-gray-700 mb-2">Descriptivo Visual (Golden Samples) <span className="text-red-500">*</span></label>
                                     <div className="border-2 border-dashed border-gray-300 rounded-lg p-4 bg-gray-50">
                                         <div className="flex flex-wrap gap-4">
                                             {formData.resVisuals.map((url, i) => (
@@ -884,6 +1134,9 @@ const CreateWizardModal: React.FC<WizardProps> = ({ isOpen, onClose, plants, onS
                                             <label className="w-32 h-32 flex flex-col items-center justify-center border-2 border-gray-300 border-dashed rounded-lg cursor-pointer hover:bg-gray-100 transition-colors text-gray-400 hover:text-gray-600"><PlusCircleIcon className="w-8 h-8 mb-1"/><span className="text-xs font-bold">Agregar Fotos</span><input type="file" multiple className="hidden" onChange={e => addResultImages(e.target.files)} /></label>
                                         </div>
                                     </div>
+                                    <p className="text-xs text-blue-600 mt-2 bg-blue-50 p-2 rounded border border-blue-100 font-medium">
+                                        ℹ️ Nota: Cada fotografía que se sube aquí se establece como el estándar de comparación (Golden Sample). Durante la ejecución, la evidencia del usuario será comparada contra estas imágenes.
+                                    </p>
                                 </div>
                                 <div className="grid grid-cols-2 gap-4 pt-4">
                                     <label className={`flex items-center gap-3 p-3 border rounded-lg cursor-pointer transition-colors ${formData.resValidation ? 'bg-blue-50 border-blue-500' : 'bg-white'}`}>
@@ -901,15 +1154,76 @@ const CreateWizardModal: React.FC<WizardProps> = ({ isOpen, onClose, plants, onS
                 );
             case 4:
                 return (
-                    <div className="h-full flex flex-col items-center justify-center space-y-6 animate-fade-in text-center">
-                        <div className="w-20 h-20 bg-green-100 rounded-full flex items-center justify-center"><CheckCircleIcon className="w-10 h-10 text-green-600"/></div>
-                        <div><h3 className="text-2xl font-bold text-gray-800">¡Instrucción Lista!</h3><p className="text-gray-500 mt-2">Se han configurado {formData.steps.length} pasos y un resultado esperado.</p></div>
-                        <div className="bg-gray-50 p-4 rounded-lg text-left max-w-md w-full border border-gray-200">
-                            <p className="text-sm"><strong>Título:</strong> {formData.title}</p>
-                            <p className="text-sm"><strong>Código:</strong> {formData.code}</p>
-                            <p className="text-sm"><strong>Planta:</strong> {selectedPlant?.name || 'N/A'}</p>
+                    <div className="h-full flex flex-col space-y-4 animate-fade-in pb-4">
+                        <div className="text-center space-y-2 mb-4">
+                            <h3 className="text-xl font-bold text-gray-800">Resumen de Instrucción</h3>
+                            <p className="text-sm text-gray-500">Revise la totalidad de la información antes de guardar.</p>
                         </div>
-                        <button onClick={handleFinalSave} className="bg-green-600 text-white px-8 py-3 rounded-lg font-bold shadow-lg hover:bg-green-700 transition-transform hover:scale-105 flex items-center gap-2"><ArrowUpOnSquareIcon className="w-5 h-5"/>Guardar Instrucción</button>
+                        
+                        <div className="bg-white border border-gray-200 rounded-lg p-4 shadow-sm space-y-4 text-sm flex-1 overflow-y-auto">
+                            {/* Section 1: Info */}
+                            <div>
+                                <h4 className="font-bold text-gray-700 uppercase text-xs border-b pb-1 mb-2">1. Información General</h4>
+                                <div className="grid grid-cols-2 gap-y-2 text-gray-600">
+                                    <p><span className="font-bold">Código:</span> {formData.code}</p>
+                                    <p><span className="font-bold">Título:</span> {formData.title}</p>
+                                    <p><span className="font-bold">Estimado:</span> {formData.estimatedTime} min</p>
+                                    <p className="col-span-2"><span className="font-bold">Descripción:</span> {formData.description}</p>
+                                </div>
+                            </div>
+
+                            {/* Section 2: Resources */}
+                            <div>
+                                <h4 className="font-bold text-gray-700 uppercase text-xs border-b pb-1 mb-2">2. Recursos</h4>
+                                <div className="grid grid-cols-3 gap-2 text-xs">
+                                    <div className="bg-gray-50 p-2 rounded">
+                                        <span className="font-bold block text-gray-500">Herramientas</span>
+                                        <p>{formData.toolsStr.split('\n').length} items</p>
+                                    </div>
+                                    <div className="bg-gray-50 p-2 rounded">
+                                        <span className="font-bold block text-gray-500">Insumos</span>
+                                        <p>{formData.suppliesStr.split('\n').length} items</p>
+                                    </div>
+                                    <div className="bg-gray-50 p-2 rounded">
+                                        <span className="font-bold block text-gray-500">Habilidades</span>
+                                        <p>{formData.skillsStr.split('\n').length} items</p>
+                                    </div>
+                                </div>
+                            </div>
+
+                            {/* Section 3: Steps */}
+                            <div>
+                                <h4 className="font-bold text-gray-700 uppercase text-xs border-b pb-1 mb-2">3. Instrucciones ({formData.steps.length} Pasos)</h4>
+                                <ul className="list-decimal pl-5 space-y-1 text-gray-600 text-xs">
+                                    {formData.steps.map(step => (
+                                        <li key={step.id}>
+                                            <span className="font-bold">{step.title}</span> 
+                                            {step.media.length > 0 && <span className="text-gray-400 ml-2">({step.media.length} medios)</span>}
+                                        </li>
+                                    ))}
+                                </ul>
+                            </div>
+
+                            {/* Section 4: Result */}
+                            <div>
+                                <h4 className="font-bold text-gray-700 uppercase text-xs border-b pb-1 mb-2">4. Resultado Final</h4>
+                                <div className="text-gray-600">
+                                    <p><span className="font-bold">Título:</span> {formData.resTitle}</p>
+                                    <p className="text-xs mt-1">{formData.resDescription}</p>
+                                    <div className="flex gap-2 mt-2">
+                                        {formData.resVisuals.map((url, i) => (
+                                            <img key={i} src={url} className="w-10 h-10 object-cover rounded border" alt="ref" />
+                                        ))}
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div className="flex justify-center pt-2">
+                            <button onClick={handleFinalSave} className="bg-green-600 text-white px-8 py-3 rounded-lg font-bold shadow-lg hover:bg-green-700 transition-transform hover:scale-105 flex items-center gap-2">
+                                <ArrowUpOnSquareIcon className="w-5 h-5"/> Confirmar y Guardar
+                            </button>
+                        </div>
                     </div>
                 );
             default: return null;
@@ -920,12 +1234,12 @@ const CreateWizardModal: React.FC<WizardProps> = ({ isOpen, onClose, plants, onS
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
             <div className="bg-white w-full max-w-4xl h-[85vh] rounded-2xl shadow-2xl flex flex-col overflow-hidden">
                 <div className="bg-white border-b border-gray-200 p-4 flex justify-between items-center shrink-0">
-                    <div><h2 className="text-xl font-bold text-gray-900">Crear Nueva Instrucción</h2><p className="text-xs text-gray-500">Paso {currentStep} de {totalSteps}</p></div>
+                    <div><h2 className="text-xl font-bold text-gray-900">{initialData ? 'Editar Instrucción' : 'Crear Nueva Instrucción'}</h2><p className="text-xs text-gray-500">Paso {currentStep} de {totalSteps}</p></div>
                     <button onClick={onClose} className="p-2 hover:bg-gray-100 rounded-full text-gray-500"><XIcon className="w-6 h-6"/></button>
                 </div>
                 <div className="bg-gray-50 px-6 py-4 border-b border-gray-200 flex justify-center">
                     <div className="flex items-center gap-4">
-                        {['Información', 'Instrucciones', 'Resultado', 'Guardar'].map((label, idx) => {
+                        {['Información', 'Instrucciones', 'Resultado', 'Resumen'].map((label, idx) => {
                             const stepNum = idx + 1;
                             const isActive = stepNum === currentStep;
                             const isCompleted = stepNum < currentStep;
@@ -940,12 +1254,25 @@ const CreateWizardModal: React.FC<WizardProps> = ({ isOpen, onClose, plants, onS
                     </div>
                 </div>
                 <div className="flex-1 overflow-y-auto p-6 bg-gray-50/50">{renderStepContent()}</div>
-                {currentStep < 4 && (
-                    <div className="p-4 bg-white border-t border-gray-200 flex justify-between items-center shrink-0">
-                        <button onClick={() => setCurrentStep(prev => Math.max(1, prev - 1))} disabled={currentStep === 1} className="px-6 py-2 rounded-lg text-gray-600 font-bold hover:bg-gray-100 disabled:opacity-50">Atrás</button>
-                        <button onClick={() => setCurrentStep(prev => Math.min(totalSteps, prev + 1))} className="px-8 py-2 bg-blue-600 text-white rounded-lg font-bold hover:bg-blue-700 shadow-md transition-transform active:scale-95">Siguiente Paso</button>
+                <div className="p-4 bg-white border-t border-gray-200 flex justify-between items-center shrink-0">
+                    <div>
+                        {currentStep === 1 && (
+                            <button onClick={onClose} className="px-6 py-2 rounded-lg text-red-600 font-bold hover:bg-red-50 border border-transparent hover:border-red-100">Cancelar</button>
+                        )}
+                        {currentStep > 1 && currentStep < 4 && (
+                            <button onClick={() => setCurrentStep(prev => Math.max(1, prev - 1))} className="px-6 py-2 rounded-lg text-gray-600 font-bold hover:bg-gray-100">Atrás</button>
+                        )}
                     </div>
-                )}
+                    {currentStep < 4 && (
+                        <button 
+                            onClick={() => setCurrentStep(prev => Math.min(totalSteps, prev + 1))} 
+                            disabled={!canProceedToNextStep()}
+                            className={`px-8 py-2 rounded-lg font-bold shadow-md transition-transform active:scale-95 ${!canProceedToNextStep() ? 'bg-gray-300 text-gray-500 cursor-not-allowed' : 'bg-blue-600 text-white hover:bg-blue-700'}`}
+                        >
+                            Siguiente Paso
+                        </button>
+                    )}
+                </div>
             </div>
         </div>
     );
@@ -954,68 +1281,44 @@ const CreateWizardModal: React.FC<WizardProps> = ({ isOpen, onClose, plants, onS
 // --- MAIN COMPONENT ---
 
 const WorkInstructions: React.FC<WorkInstructionsProps> = ({ plants }) => {
-    // State initialization
-    const [allInstructions, setAllInstructions] = useState<WorkInstruction[]>(() => generateMockInstructions(plants));
-    const [assignedTasks, setAssignedTasks] = useState<AssignedTask[]>(() => generateMockAssignedTasks(allInstructions));
+    // New View Mode State
+    const [viewMode, setViewMode] = useState<'library' | 'assignments' | 'results'>('library');
+    const [instructions, setInstructions] = useState<WorkInstruction[]>(() => generateMockInstructions(plants));
+    const [assignedTasks, setAssignedTasks] = useState<AssignedTask[]>(() => generateMockAssignedTasks(instructions));
     
-    const [viewMode, setViewMode] = useState<'assigned_dashboard' | 'repository' | 'results'>('assigned_dashboard');
-    const [selectedItem, setSelectedItem] = useState<WorkInstruction | null>(null);
-    const [isWizardOpen, setIsWizardOpen] = useState(false);
-    const [isAssignModalOpen, setIsAssignModalOpen] = useState(false);
-    const [viewerState, setViewerState] = useState<{ isOpen: boolean; url: string | null }>({ isOpen: false, url: null });
-    
-    // Confirmation / AI State
-    const [confirmState, setConfirmState] = useState({
-        isOpen: false,
-        file: null as File | null,
-        previewUrl: null as string | null,
-        status: 'idle' as 'idle' | 'analyzing' | 'success' | 'error',
-        message: ''
-    });
+    // Filters
+    const [search, setSearch] = useState('');
+    const [statusFilter, setStatusFilter] = useState('');
 
-    useEffect(() => {
-        setConfirmState({ isOpen: false, file: null, previewUrl: null, status: 'idle', message: '' });
-    }, [selectedItem]);
+    // Modals
+    const [wizardOpen, setWizardOpen] = useState(false);
+    const [assignOpen, setAssignOpen] = useState(false);
+    const [selectedInstr, setSelectedInstr] = useState<WorkInstruction | null>(null);
+    const [previewUrl, setPreviewUrl] = useState<string | null>(null);
 
-    // Table Filters for Repository
-    const [tableFilters, setTableFilters] = useState({
-        code: '', title: '', plant: '', process: '', subprocess: '', creator: '', resource: ''
-    });
+    // Derived
+    const filteredInstructions = useMemo(() => {
+        return instructions.filter(i => 
+            (i.title.toLowerCase().includes(search.toLowerCase()) || i.code.toLowerCase().includes(search.toLowerCase())) &&
+            (!statusFilter || i.status === statusFilter)
+        );
+    }, [instructions, search, statusFilter]);
 
-    const getNames = (inst: WorkInstruction) => {
-        const plant = plants.find(p => p.id === inst.plantId);
-        const process = plant?.processes.find(p => p.id === inst.processId);
-        const subprocess = process?.subprocesses.find(s => s.id === inst.subprocessId);
-        return {
-            plantName: plant?.name || 'N/A',
-            processName: process?.name || 'N/A',
-            subprocessName: subprocess?.name || 'N/A'
-        };
-    };
-
-    const filteredData = useMemo(() => {
-        return allInstructions.filter(item => {
-            const names = getNames(item);
-            const resources = [...item.tools, ...item.supplies, ...item.skills].join(' ').toLowerCase();
-            return (
-                item.code.toLowerCase().includes(tableFilters.code.toLowerCase()) &&
-                item.title.toLowerCase().includes(tableFilters.title.toLowerCase()) &&
-                names.plantName.toLowerCase().includes(tableFilters.plant.toLowerCase()) &&
-                names.processName.toLowerCase().includes(tableFilters.process.toLowerCase()) &&
-                names.subprocessName.toLowerCase().includes(tableFilters.subprocess.toLowerCase()) &&
-                item.creator.toLowerCase().includes(tableFilters.creator.toLowerCase()) &&
-                resources.includes(tableFilters.resource.toLowerCase())
-            );
+    const handleCreate = (data: WorkInstruction) => {
+        setInstructions(prev => {
+            const exists = prev.findIndex(i => i.id === data.id);
+            if (exists >= 0) {
+                const updated = [...prev];
+                updated[exists] = data;
+                return updated;
+            }
+            return [data, ...prev];
         });
-    }, [allInstructions, tableFilters, plants]);
-
-    // Handlers
-    const handleSaveNewInstruction = (newInstruction: WorkInstruction) => {
-        setAllInstructions(prev => [newInstruction, ...prev]);
-        setIsWizardOpen(false);
+        setWizardOpen(false);
+        setSelectedInstr(null);
     };
 
-    const handleAssignInstruction = (data: any) => {
+    const handleAssign = (data: { instruction: WorkInstruction, priority: any, urgency: any, assignTo: string, timeEst: string, machine: string }) => {
         const newTask: AssignedTask = {
             id: `task-${Date.now()}`,
             workInstruction: data.instruction,
@@ -1023,575 +1326,186 @@ const WorkInstructions: React.FC<WorkInstructionsProps> = ({ plants }) => {
             urgency: data.urgency,
             assignedTo: data.assignTo,
             assignedAt: new Date().toISOString(),
-            dueDate: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(), // Default 24h
+            dueDate: new Date(Date.now() + 86400000).toISOString(),
             status: 'pending',
             machineContext: data.machine,
             timeEst: data.timeEst
         };
         setAssignedTasks(prev => [newTask, ...prev]);
-        setIsAssignModalOpen(false);
     };
 
-    const handleConfirmClick = () => setConfirmState(prev => ({ ...prev, isOpen: true }));
-
-    const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
-        if (e.target.files && e.target.files[0]) {
-            const file = e.target.files[0];
-            const url = URL.createObjectURL(file);
-            setConfirmState({ ...confirmState, file: file, previewUrl: url, status: 'idle', message: '' });
-        }
+    const handleStartTask = (taskId: string) => {
+        setAssignedTasks(prev => prev.map(task => {
+            if (task.id === taskId) {
+                return { 
+                    ...task, 
+                    status: 'in_progress' as const,
+                    startedAt: new Date().toISOString() 
+                };
+            }
+            return task;
+        }));
     };
 
-    const handleViewImage = (url: string) => setViewerState({ isOpen: true, url });
-
-    const runAIAnalysis = () => {
-        setConfirmState(prev => ({ ...prev, status: 'analyzing' }));
-        setTimeout(() => {
-            const isSuccess = Math.random() > 0.2; 
-            setConfirmState(prev => ({
-                ...prev,
-                status: isSuccess ? 'success' : 'error',
-                message: isSuccess ? 'Validación Exitosa: La evidencia coincide 98% con el estándar visual.' : 'Validación Fallida: No se detecta el componente clave en la imagen.'
-            }));
-        }, 2000);
-    };
-
-    // New Helpers for Badges
-    const getPriorityBadge = (p: 'P1' | 'P2' | 'P3') => {
-        const colors = { P1: 'bg-red-100 text-red-700 border-red-200', P2: 'bg-yellow-100 text-yellow-700 border-yellow-200', P3: 'bg-blue-100 text-blue-700 border-blue-200' };
-        return <span className={`px-2 py-0.5 rounded text-xs font-bold border ${colors[p]}`}>{p}</span>;
-    };
-
-    const getUrgencyBadge = (u: 'U1' | 'U2' | 'U3') => {
-        const colors = { U1: 'bg-purple-100 text-purple-700 border-purple-200', U2: 'bg-orange-100 text-orange-700 border-orange-200', U3: 'bg-gray-100 text-gray-700 border-gray-200' };
-        return <span className={`px-2 py-0.5 rounded text-xs font-bold border ${colors[u]}`}>{u}</span>;
+    const handleOpenTask = (task: AssignedTask) => {
+        // For now, reuse the wizard modal in view/preview mode if needed
+        // or just set selected and open a preview.
+        setSelectedInstr(task.workInstruction);
+        setWizardOpen(true);
     };
 
     return (
-        <div className="flex flex-col h-[calc(100vh-100px)] relative bg-gray-50">
-            {/* Header */}
-            <header className="bg-white border-b border-gray-200 p-4 sticky top-0 z-30 shadow-sm flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
-                <div className="flex items-center gap-2">
-                    <div className="bg-blue-100 p-1.5 rounded-lg">
-                        <BookOpenIcon className="w-6 h-6 text-blue-600"/>
-                    </div>
+        <div className="h-full flex flex-col space-y-6">
+            <div className="flex justify-between items-center bg-white p-4 rounded-lg shadow-sm border border-gray-200">
+                <div className="flex items-center gap-3">
+                    <div className="p-2 bg-indigo-100 text-indigo-600 rounded-lg"><ClipboardDocumentCheckIcon className="w-6 h-6"/></div>
                     <div>
-                        <h1 className="text-xl font-bold text-gray-800 leading-none">
-                            {viewMode === 'assigned_dashboard' ? 'Tablero de Asignaciones' : viewMode === 'results' ? 'Resultados Operativos' : 'Acervo de Instrucciones'}
-                        </h1>
-                        <p className="text-xs text-gray-500 mt-1">
-                            {viewMode === 'assigned_dashboard' ? 'Monitoreo de ejecución operativa' : viewMode === 'results' ? 'Análisis de cumplimiento y efectividad' : 'Biblioteca de procedimientos estándar (SOPs)'}
-                        </p>
+                        <h2 className="text-xl font-bold text-gray-900">Instrucciones de Trabajo</h2>
+                        <p className="text-sm text-gray-500">Biblioteca de estándares operativos y asignación de tareas.</p>
                     </div>
                 </div>
-                
-                <div className="flex items-center gap-2">
-                    <button 
-                        onClick={() => setViewMode('assigned_dashboard')}
-                        className={`font-bold py-2 px-4 rounded-lg shadow-sm flex items-center justify-center gap-2 text-sm border transition-colors ${viewMode === 'assigned_dashboard' ? 'bg-blue-50 text-blue-700 border-blue-200' : 'bg-white text-gray-700 hover:bg-gray-50 border-gray-300'}`}
-                    >
-                        <ClipboardDocumentCheckIcon className="w-4 h-4"/>
-                        <span className="hidden sm:inline">Tablero</span>
+                <div className="flex bg-gray-100 p-1 rounded-lg">
+                    <button onClick={() => setViewMode('library')} className={`px-4 py-2 text-sm font-bold rounded-md transition-colors flex items-center gap-2 ${viewMode === 'library' ? 'bg-white text-indigo-600 shadow-sm' : 'text-gray-500 hover:text-gray-900'}`}>
+                        <BookOpenIcon className="w-4 h-4"/> Biblioteca
                     </button>
-
-                    <button 
-                        onClick={() => setViewMode('repository')}
-                        className={`font-bold py-2 px-4 rounded-lg shadow-sm flex items-center justify-center gap-2 text-sm border transition-colors ${viewMode === 'repository' ? 'bg-blue-50 text-blue-700 border-blue-200' : 'bg-white text-gray-700 hover:bg-gray-50 border-gray-300'}`}
-                    >
-                        <ArchiveBoxIcon className="w-4 h-4"/>
-                        <span className="hidden sm:inline">Acervo</span>
+                    <button onClick={() => setViewMode('assignments')} className={`px-4 py-2 text-sm font-bold rounded-md transition-colors flex items-center gap-2 ${viewMode === 'assignments' ? 'bg-white text-indigo-600 shadow-sm' : 'text-gray-500 hover:text-gray-900'}`}>
+                        <ClipboardDocumentCheckIcon className="w-4 h-4"/> Asignaciones
                     </button>
-
-                    <button 
-                        onClick={() => setIsAssignModalOpen(true)}
-                        className="font-bold py-2 px-4 rounded-lg shadow-sm flex items-center justify-center gap-2 text-sm border bg-white text-gray-700 hover:bg-gray-50 border-gray-300"
-                    >
-                        <UserIcon className="w-4 h-4"/>
-                        <span className="hidden sm:inline">Asignar Instrucción</span>
-                    </button>
-
-                    <button 
-                        onClick={() => setViewMode('results')}
-                        className={`font-bold py-2 px-4 rounded-lg shadow-sm flex items-center justify-center gap-2 text-sm border transition-colors ${viewMode === 'results' ? 'bg-blue-50 text-blue-700 border-blue-200' : 'bg-white text-gray-700 hover:bg-gray-50 border-gray-300'}`}
-                    >
-                        <ChartBarIcon className="w-4 h-4"/>
-                        <span className="hidden sm:inline">Resultados</span>
-                    </button>
-
-                    <div className="w-px h-6 bg-gray-300 mx-1"></div>
-
-                    <button 
-                        onClick={() => setIsWizardOpen(true)}
-                        className="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-lg shadow-sm flex items-center justify-center gap-2 transition-transform active:scale-95 text-sm"
-                    >
-                        <PlusCircleIcon className="w-4 h-4"/>
-                        <span className="hidden sm:inline">Nueva</span>
+                    <button onClick={() => setViewMode('results')} className={`px-4 py-2 text-sm font-bold rounded-md transition-colors flex items-center gap-2 ${viewMode === 'results' ? 'bg-white text-indigo-600 shadow-sm' : 'text-gray-500 hover:text-gray-900'}`}>
+                        <ChartBarIcon className="w-4 h-4"/> Resultados
                     </button>
                 </div>
-            </header>
-
-            {/* CONTENT AREA */}
-            <div className="flex-1 overflow-auto p-4">
-                
-                {/* VIEW 1: ASSIGNED DASHBOARD (MAIN) */}
-                {viewMode === 'assigned_dashboard' && (
-                    <div className="bg-white border border-gray-200 rounded-lg shadow-sm overflow-hidden animate-fade-in">
-                        <table className="w-full text-left text-sm whitespace-nowrap">
-                            <thead className="bg-gray-50 text-gray-600 font-bold text-xs uppercase sticky top-0 z-10 shadow-sm">
-                                <tr>
-                                    <th className="p-3">IT / Tiempo</th>
-                                    <th className="p-3">Instrucción Asignada</th>
-                                    <th className="p-3 text-center">Prioridad</th>
-                                    <th className="p-3 text-center">Urgencia</th>
-                                    <th className="p-3">Asignado</th>
-                                    <th className="p-3 text-center">Acciones</th>
-                                </tr>
-                            </thead>
-                            <tbody className="divide-y divide-gray-100">
-                                {assignedTasks.filter(t => t.status !== 'completed').map(task => {
-                                    const timeDiff = new Date(task.dueDate).getTime() - new Date().getTime();
-                                    const hoursLeft = Math.ceil(timeDiff / (1000 * 3600));
-                                    const isOverdue = hoursLeft < 0;
-
-                                    return (
-                                        <tr key={task.id} className="hover:bg-blue-50 transition-colors">
-                                            <td className="p-3">
-                                                <div className="flex flex-col">
-                                                    <span className="font-mono font-bold text-blue-600">{task.workInstruction.code}</span>
-                                                    <span className={`text-[10px] font-bold mt-1 ${isOverdue ? 'text-red-500' : 'text-gray-500'}`}>
-                                                        {isOverdue ? `Vencido hace ${Math.abs(hoursLeft)}h` : `${hoursLeft}h restantes`}
-                                                    </span>
-                                                </div>
-                                            </td>
-                                            <td className="p-3">
-                                                <div className="font-semibold text-gray-800">{task.workInstruction.title}</div>
-                                                <div className="text-xs text-gray-500 flex items-center gap-1 mt-0.5">
-                                                    <WrenchScrewdriverIcon className="w-3 h-3"/> {task.machineContext}
-                                                </div>
-                                            </td>
-                                            <td className="p-3 text-center">{getPriorityBadge(task.priority)}</td>
-                                            <td className="p-3 text-center">{getUrgencyBadge(task.urgency)}</td>
-                                            <td className="p-3">
-                                                <div className="flex items-center gap-2">
-                                                    <div className="w-8 h-8 rounded-full bg-gray-200 text-gray-600 flex items-center justify-center text-xs font-bold border border-gray-300">
-                                                        {task.assignedTo.charAt(0)}
-                                                    </div>
-                                                    <span className="text-xs font-medium text-gray-700">{task.assignedTo}</span>
-                                                </div>
-                                            </td>
-                                            <td className="p-3 text-center">
-                                                <div className="flex items-center justify-center gap-2">
-                                                    <button 
-                                                        onClick={() => setSelectedItem(task.workInstruction)}
-                                                        className="p-1.5 text-gray-500 hover:text-blue-600 bg-white hover:bg-blue-50 border border-gray-200 rounded transition-colors"
-                                                        title="Ver Detalles"
-                                                    >
-                                                        <EyeIcon className="w-4 h-4"/>
-                                                    </button>
-                                                    <button 
-                                                        onClick={() => alert(`Iniciando instrucción: ${task.workInstruction.code}`)}
-                                                        className="flex items-center gap-1 bg-green-600 hover:bg-green-700 text-white text-xs font-bold px-3 py-1.5 rounded shadow-sm transition-transform active:scale-95"
-                                                    >
-                                                        <PlayIcon className="w-3 h-3"/> Iniciar
-                                                    </button>
-                                                </div>
-                                            </td>
-                                        </tr>
-                                    );
-                                })}
-                                {assignedTasks.filter(t => t.status !== 'completed').length === 0 && (
-                                    <tr>
-                                        <td colSpan={6} className="text-center py-8 text-gray-400">
-                                            No hay instrucciones asignadas pendientes.
-                                        </td>
-                                    </tr>
-                                )}
-                            </tbody>
-                        </table>
-                    </div>
-                )}
-
-                {/* VIEW 2: REPOSITORY (ORIGINAL VIEW) */}
-                {viewMode === 'repository' && (
-                    <div className="bg-white border border-gray-200 rounded-lg shadow-sm overflow-hidden animate-fade-in">
-                        <table className="w-full text-left text-sm whitespace-nowrap">
-                            <thead className="bg-gray-100 text-gray-600 font-bold text-xs uppercase sticky top-0 z-10 shadow-sm">
-                                <tr>
-                                    <th className="p-3 w-16 text-center">Ref</th>
-                                    <th className="p-3">Código</th>
-                                    <th className="p-3">Instrucción</th>
-                                    <th className="p-3">Planta</th>
-                                    <th className="p-3">Proceso</th>
-                                    <th className="p-3">Subproceso</th>
-                                    <th className="p-3">Creador</th>
-                                    <th className="p-3 text-center">Recursos</th>
-                                    <th className="p-3 text-center">Tiempo</th>
-                                    <th className="p-3 text-center">Acción</th>
-                                </tr>
-                                <tr className="bg-gray-50 border-b border-gray-200">
-                                    <th className="p-2"></th>
-                                    <th className="p-2"><input placeholder="Filtro..." className="w-full text-xs p-1 border rounded bg-white font-normal" value={tableFilters.code} onChange={e => setTableFilters({...tableFilters, code: e.target.value})} /></th>
-                                    <th className="p-2"><input placeholder="Filtro..." className="w-full text-xs p-1 border rounded bg-white font-normal" value={tableFilters.title} onChange={e => setTableFilters({...tableFilters, title: e.target.value})} /></th>
-                                    <th className="p-2"><input placeholder="Filtro..." className="w-full text-xs p-1 border rounded bg-white font-normal" value={tableFilters.plant} onChange={e => setTableFilters({...tableFilters, plant: e.target.value})} /></th>
-                                    <th className="p-2"><input placeholder="Filtro..." className="w-full text-xs p-1 border rounded bg-white font-normal" value={tableFilters.process} onChange={e => setTableFilters({...tableFilters, process: e.target.value})} /></th>
-                                    <th className="p-2"><input placeholder="Filtro..." className="w-full text-xs p-1 border rounded bg-white font-normal" value={tableFilters.subprocess} onChange={e => setTableFilters({...tableFilters, subprocess: e.target.value})} /></th>
-                                    <th className="p-2"><input placeholder="Filtro..." className="w-full text-xs p-1 border rounded bg-white font-normal" value={tableFilters.creator} onChange={e => setTableFilters({...tableFilters, creator: e.target.value})} /></th>
-                                    <th className="p-2"><input placeholder="Herramienta/Insumo..." className="w-full text-xs p-1 border rounded bg-white font-normal" value={tableFilters.resource} onChange={e => setTableFilters({...tableFilters, resource: e.target.value})} /></th>
-                                    <th className="p-2"></th>
-                                    <th className="p-2"></th>
-                                </tr>
-                            </thead>
-                            <tbody className="divide-y divide-gray-100">
-                                {filteredData.map(item => {
-                                    const names = getNames(item);
-                                    return (
-                                        <tr key={item.id} className="hover:bg-blue-50 transition-colors cursor-pointer group" onClick={() => setSelectedItem(item)}>
-                                            <td className="p-3 text-center">
-                                                <div className="w-10 h-10 rounded bg-gray-200 overflow-hidden border border-gray-300 mx-auto">
-                                                    {item.thumbnailUrl ? <img src={item.thumbnailUrl} className="w-full h-full object-cover" alt="ref"/> : <CameraIcon className="w-5 h-5 m-2.5 text-gray-400"/>}
-                                                </div>
-                                            </td>
-                                            <td className="p-3">
-                                                <span className="font-mono text-xs font-bold text-blue-600 bg-blue-50 px-2 py-0.5 rounded">{item.code}</span>
-                                            </td>
-                                            <td className="p-3 font-semibold text-gray-800 max-w-[200px] truncate" title={item.title}>
-                                                {item.title}
-                                                <div className='mt-1'><StatusBadge status={item.status} /></div>
-                                            </td>
-                                            <td className="p-3 text-xs text-gray-600">{names.plantName}</td>
-                                            <td className="p-3 text-xs text-gray-600">{names.processName}</td>
-                                            <td className="p-3 text-xs text-gray-600">{names.subprocessName}</td>
-                                            <td className="p-3 text-xs">
-                                                <div className="flex items-center gap-2">
-                                                    <div className="w-6 h-6 rounded-full bg-gray-200 text-gray-600 flex items-center justify-center text-[10px] font-bold">{item.creator.charAt(0)}</div>
-                                                    {item.creator}
-                                                </div>
-                                            </td>
-                                            <td className="p-3">
-                                                <div className="flex gap-2 justify-center">
-                                                    <ResourcePill count={item.tools.length} icon={<WrenchScrewdriverIcon className="w-3 h-3"/>} color="border-blue-200 bg-blue-50 text-blue-700" title={item.tools.join(', ')} />
-                                                    <ResourcePill count={item.supplies.length} icon={<BeakerIcon className="w-3 h-3"/>} color="border-purple-200 bg-purple-50 text-purple-700" title={item.supplies.join(', ')} />
-                                                    <ResourcePill count={item.skills.length} icon={<UserIcon className="w-3 h-3"/>} color="border-orange-200 bg-orange-50 text-orange-700" title={item.skills.join(', ')} />
-                                                </div>
-                                            </td>
-                                            <td className="p-3 text-center">
-                                                <div className="inline-flex items-center gap-1 text-xs font-bold text-gray-700 bg-gray-100 px-2 py-1 rounded">
-                                                    <ClockIcon className="w-3 h-3"/> {item.estimatedTime}
-                                                </div>
-                                            </td>
-                                            <td className="p-3 text-center">
-                                                <button className="text-gray-400 hover:text-blue-600 transition-colors p-1 bg-white hover:bg-blue-50 rounded border border-transparent hover:border-blue-200">
-                                                    <ArrowUpOnSquareIcon className="w-4 h-4"/>
-                                                </button>
-                                            </td>
-                                        </tr>
-                                    )
-                                })}
-                                {filteredData.length === 0 && (
-                                    <tr>
-                                        <td colSpan={10} className="text-center py-8 text-gray-400">
-                                            No se encontraron instrucciones con los filtros actuales.
-                                        </td>
-                                    </tr>
-                                )}
-                            </tbody>
-                        </table>
-                    </div>
-                )}
-
-                {/* VIEW 3: RESULTS DASHBOARD */}
-                {viewMode === 'results' && (
-                    <ResultsDashboard tasks={assignedTasks} />
-                )}
             </div>
 
-            {/* WIZARD MODAL */}
-            <CreateWizardModal 
-                isOpen={isWizardOpen} 
-                onClose={() => setIsWizardOpen(false)} 
-                plants={plants} 
-                onSave={handleSaveNewInstruction} 
-            />
-
-            {/* ASSIGN MODAL */}
-            <AssignInstructionModal 
-                isOpen={isAssignModalOpen}
-                onClose={() => setIsAssignModalOpen(false)}
-                instructions={allInstructions}
-                onAssign={handleAssignInstruction}
-            />
-
-            {/* IMAGE VIEWER */}
-            <ImageViewerModal 
-                isOpen={viewerState.isOpen}
-                url={viewerState.url}
-                onClose={() => setViewerState({ isOpen: false, url: null })}
-            />
-
-            {/* SIDE PANEL (Detail) */}
-            {selectedItem && (() => {
-                const { plantName, processName, subprocessName } = getNames(selectedItem);
-                return (
-                    <div className="fixed inset-0 z-50 flex justify-end">
-                        <div className="absolute inset-0 bg-black/30 backdrop-blur-sm transition-opacity" onClick={() => setSelectedItem(null)}></div>
-                        <div className={`relative bg-white h-full shadow-2xl flex flex-col animate-slide-in-right transition-all duration-300 w-full md:w-[60%]`}>
-                            
-                            {/* Panel Header */}
-                            <div className="p-4 border-b border-gray-200 flex flex-col bg-white z-20">
-                                <div className="flex justify-between items-start">
-                                    <div>
-                                        <div className="flex items-center gap-2 mb-1">
-                                            <span className="bg-blue-100 text-blue-700 px-2 py-0.5 rounded text-xs font-bold border border-blue-200">{selectedItem.code}</span>
-                                            <StatusBadge status={selectedItem.status} />
-                                        </div>
-                                        <h2 className="text-xl font-bold text-gray-900 leading-tight pr-4">{selectedItem.title}</h2>
-                                    </div>
-                                    <button onClick={() => setSelectedItem(null)} className="p-2 hover:bg-gray-100 rounded-full transition-colors"><XIcon className="w-6 h-6 text-gray-500"/></button>
-                                </div>
+            {viewMode === 'library' && (
+                <div className="flex-1 bg-white p-6 rounded-lg shadow-sm border border-gray-200 flex flex-col overflow-hidden">
+                    <div className="flex justify-between items-center mb-6">
+                        <div className="flex gap-4">
+                            <div className="relative">
+                                <input 
+                                    type="text" 
+                                    placeholder="Buscar instrucción..." 
+                                    value={search}
+                                    onChange={(e) => setSearch(e.target.value)}
+                                    className="pl-9 pr-4 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 w-64"
+                                />
+                                <SearchIcon className="w-4 h-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2"/>
                             </div>
-
-                            <div className="flex-1 overflow-y-auto bg-gray-50 relative p-6">
-                                <div className="space-y-6">
-                                    {/* Description & Context */}
-                                    <section className="bg-white p-5 rounded-xl shadow-sm border border-gray-200">
-                                        <h4 className="text-xs font-bold text-gray-400 uppercase mb-3 flex items-center gap-2">
-                                            <DocumentTextIcon className="w-4 h-4"/> Información General
-                                        </h4>
-                                        <p className="text-sm text-gray-800 mb-6 leading-relaxed border-l-4 border-blue-500 pl-3 py-1 bg-blue-50/50 rounded-r">
-                                            {selectedItem.objective}
-                                        </p>
-
-                                        <div className="grid grid-cols-2 gap-y-4 gap-x-8 text-sm">
-                                            <div className="flex flex-col">
-                                                <span className="text-[10px] uppercase font-bold text-gray-400">Creador</span>
-                                                <span className="font-semibold text-gray-700">{selectedItem.creator}</span>
-                                            </div>
-                                            <div className="flex flex-col">
-                                                <span className="text-[10px] uppercase font-bold text-gray-400">Planta</span>
-                                                <span className="font-semibold text-gray-700">{plantName}</span>
-                                            </div>
-                                            <div className="flex flex-col">
-                                                <span className="text-[10px] uppercase font-bold text-gray-400">Proceso</span>
-                                                <span className="font-semibold text-gray-700">{processName}</span>
-                                            </div>
-                                            <div className="flex flex-col">
-                                                <span className="text-[10px] uppercase font-bold text-gray-400">Subproceso</span>
-                                                <span className="font-semibold text-gray-700">{subprocessName}</span>
-                                            </div>
-                                        </div>
-                                    </section>
-
-                                    {/* Resources Grid */}
-                                    <section className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                                        <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-200">
-                                            <h5 className="font-bold text-blue-700 text-xs mb-3 flex items-center gap-2 uppercase">
-                                                <WrenchScrewdriverIcon className="w-4 h-4"/> Herramientas
-                                            </h5>
-                                            {selectedItem.tools.length > 0 ? (
-                                                <ul className="list-disc pl-4 space-y-1">
-                                                    {selectedItem.tools.map(t => <li key={t} className="text-xs text-gray-600 font-medium">{t}</li>)}
-                                                </ul>
-                                            ) : <span className="text-xs text-gray-400 italic">No especificadas</span>}
-                                        </div>
-                                        <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-200">
-                                            <h5 className="font-bold text-purple-700 text-xs mb-3 flex items-center gap-2 uppercase">
-                                                <BeakerIcon className="w-4 h-4"/> Insumos
-                                            </h5>
-                                            {selectedItem.supplies.length > 0 ? (
-                                                <ul className="list-disc pl-4 space-y-1">
-                                                    {selectedItem.supplies.map(t => <li key={t} className="text-xs text-gray-600 font-medium">{t}</li>)}
-                                                </ul>
-                                            ) : <span className="text-xs text-gray-400 italic">No especificados</span>}
-                                        </div>
-                                        <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-200">
-                                            <h5 className="font-bold text-orange-700 text-xs mb-3 flex items-center gap-2 uppercase">
-                                                <UserIcon className="w-4 h-4"/> Habilidades
-                                            </h5>
-                                            {selectedItem.skills.length > 0 ? (
-                                                <ul className="list-disc pl-4 space-y-1">
-                                                    {selectedItem.skills.map(t => <li key={t} className="text-xs text-gray-600 font-medium">{t}</li>)}
-                                                </ul>
-                                            ) : <span className="text-xs text-gray-400 italic">No especificadas</span>}
-                                        </div>
-                                    </section>
-
-                                    {/* Steps Timeline */}
-                                    <section>
-                                        <div className="flex items-center justify-between mb-4">
-                                            <h4 className="font-bold text-gray-900 flex items-center gap-2">
-                                                <div className="bg-gray-800 text-white p-1 rounded"><ArrowDownIcon className="w-4 h-4"/></div>
-                                                Pasos de Ejecución
-                                            </h4>
-                                            <span className="text-xs font-bold bg-gray-200 text-gray-600 px-2 py-1 rounded-full">{selectedItem.steps.length} Pasos</span>
-                                        </div>
-                                        
-                                        <div className="space-y-6 relative pl-4 border-l-2 border-gray-200 ml-3">
-                                            {selectedItem.steps.map((step, idx) => (
-                                                <div key={step.id} className="relative pl-6">
-                                                    {/* Step Number Bubble */}
-                                                    <div className="absolute -left-[27px] top-0 w-8 h-8 rounded-full bg-blue-600 text-white flex items-center justify-center font-bold text-sm border-4 border-gray-50 shadow-sm z-10">
-                                                        {idx + 1}
-                                                    </div>
-                                                    
-                                                    <div className="bg-white rounded-xl border border-gray-200 p-4 shadow-sm hover:shadow-md transition-shadow">
-                                                        <h5 className="font-bold text-gray-800 mb-2">{step.title}</h5>
-                                                        <p className="text-sm text-gray-600 mb-4">{step.description}</p>
-                                                        
-                                                        {step.mediaUrls && step.mediaUrls.length > 0 && (
-                                                            <div className="flex gap-2 overflow-x-auto pb-2">
-                                                                {step.mediaUrls.map((url, i) => (
-                                                                    <div 
-                                                                        key={i} 
-                                                                        className="flex-shrink-0 w-32 h-24 bg-gray-100 rounded-lg overflow-hidden border border-gray-200 cursor-zoom-in relative group"
-                                                                        onClick={() => handleViewImage(url)}
-                                                                    >
-                                                                        <img src={url} alt={`Paso ${idx+1} img ${i+1}`} className="w-full h-full object-cover transition-transform group-hover:scale-105" />
-                                                                        <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-colors flex items-center justify-center">
-                                                                            <EyeIcon className="w-6 h-6 text-white opacity-0 group-hover:opacity-100 drop-shadow-md"/>
-                                                                        </div>
-                                                                    </div>
-                                                                ))}
-                                                            </div>
-                                                        )}
-                                                    </div>
-                                                </div>
-                                            ))}
-                                        </div>
-                                    </section>
-
-                                    {/* Expected Result & Confirmation */}
-                                    {selectedItem.expectedResult && (
-                                        <section className="bg-gradient-to-br from-green-50 to-white border border-green-200 rounded-xl p-5 shadow-sm">
-                                            <h4 className="font-bold text-green-800 mb-4 flex items-center gap-2 border-b border-green-100 pb-2">
-                                                <CheckCircleIcon className="w-5 h-5"/> Resultado Esperado
-                                            </h4>
-                                            
-                                            <div className="flex flex-col gap-6">
-                                                <div className="flex-1">
-                                                    <h5 className="font-bold text-sm text-gray-800 mb-2">{selectedItem.expectedResult.title}</h5>
-                                                    <p className="text-sm text-gray-700 leading-relaxed mb-4">{selectedItem.expectedResult.description}</p>
-                                                    
-                                                    <div className="flex gap-3 mb-6">
-                                                        <div className={`px-3 py-1.5 rounded-full text-xs font-bold border flex items-center gap-1 ${selectedItem.expectedResult.requiresValidation ? 'bg-blue-100 text-blue-700 border-blue-200' : 'bg-gray-100 text-gray-500 border-gray-200'}`}>
-                                                            {selectedItem.expectedResult.requiresValidation ? <CheckCircleIcon className="w-3 h-3"/> : <XIcon className="w-3 h-3"/>}
-                                                            Validación Req: {selectedItem.expectedResult.requiresValidation ? 'SI' : 'NO'}
-                                                        </div>
-                                                        <div className={`px-3 py-1.5 rounded-full text-xs font-bold border flex items-center gap-1 ${selectedItem.expectedResult.requiresTime ? 'bg-purple-100 text-purple-700 border-purple-200' : 'bg-gray-100 text-gray-500 border-gray-200'}`}>
-                                                            {selectedItem.expectedResult.requiresTime ? <ClockIcon className="w-3 h-3"/> : <XIcon className="w-3 h-3"/>}
-                                                            Tiempo Req: {selectedItem.expectedResult.requiresTime ? 'SI' : 'NO'}
-                                                        </div>
-                                                    </div>
-
-                                                    {/* CONFIRM RESULT SECTION */}
-                                                    <div className="border-t border-green-100 pt-4">
-                                                        {!confirmState.isOpen ? (
-                                                            <button 
-                                                                onClick={handleConfirmClick}
-                                                                className="w-full bg-green-600 hover:bg-green-700 text-white font-bold py-3 rounded-lg shadow-md flex items-center justify-center gap-2 transition-transform hover:scale-105"
-                                                            >
-                                                                <CheckCircleIcon className="w-5 h-5"/>
-                                                                Confirmar Resultado
-                                                            </button>
-                                                        ) : (
-                                                            <div className="bg-white border border-gray-200 rounded-lg p-4 animate-fade-in shadow-sm">
-                                                                <h5 className="font-bold text-gray-700 mb-3 text-sm">Subir Evidencia para Validación IA</h5>
-                                                                
-                                                                {!confirmState.file ? (
-                                                                    <div className="grid grid-cols-2 gap-3">
-                                                                        <label className="flex flex-col items-center justify-center border-2 border-dashed border-gray-300 rounded-lg p-4 cursor-pointer hover:bg-gray-50 transition-colors">
-                                                                            <CameraIcon className="w-8 h-8 text-gray-400 mb-2"/>
-                                                                            <span className="text-xs font-bold text-gray-600">Tomar Foto</span>
-                                                                            <input type="file" accept="image/*" capture="environment" className="hidden" onChange={handleFileSelect} />
-                                                                        </label>
-                                                                        <label className="flex flex-col items-center justify-center border-2 border-dashed border-gray-300 rounded-lg p-4 cursor-pointer hover:bg-gray-50 transition-colors">
-                                                                            <ArrowUpOnSquareIcon className="w-8 h-8 text-gray-400 mb-2"/>
-                                                                            <span className="text-xs font-bold text-gray-600">Subir Archivo</span>
-                                                                            <input type="file" accept="image/*,application/pdf" className="hidden" onChange={handleFileSelect} />
-                                                                        </label>
-                                                                    </div>
-                                                                ) : (
-                                                                    <div className="space-y-4">
-                                                                        <div className="relative rounded-lg overflow-hidden border border-gray-200 bg-gray-100 max-h-48 flex justify-center group">
-                                                                            {confirmState.previewUrl && (
-                                                                                <img 
-                                                                                    src={confirmState.previewUrl} 
-                                                                                    alt="Preview" 
-                                                                                    className="h-full object-contain cursor-zoom-in" 
-                                                                                    onClick={() => handleViewImage(confirmState.previewUrl!)}
-                                                                                />
-                                                                            )}
-                                                                            <button onClick={() => setConfirmState({...confirmState, file: null})} className="absolute top-2 right-2 bg-black/50 text-white p-1 rounded-full hover:bg-red-500"><XIcon className="w-4 h-4"/></button>
-                                                                            <div className="absolute inset-0 pointer-events-none flex items-center justify-center">
-                                                                                <EyeIcon className="w-8 h-8 text-white opacity-0 group-hover:opacity-100 drop-shadow-md"/>
-                                                                            </div>
-                                                                        </div>
-                                                                        
-                                                                        {confirmState.status === 'idle' && (
-                                                                            <button onClick={runAIAnalysis} className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 rounded-lg flex items-center justify-center gap-2">
-                                                                                <EyeIcon className="w-4 h-4"/> Analizar con IA
-                                                                            </button>
-                                                                        )}
-
-                                                                        {confirmState.status === 'analyzing' && (
-                                                                            <div className="flex flex-col items-center justify-center py-4 text-blue-600">
-                                                                                <div className="w-8 h-8 border-4 border-blue-200 border-t-blue-600 rounded-full animate-spin mb-2"></div>
-                                                                                <span className="text-sm font-bold animate-pulse">Analizando coincidencia...</span>
-                                                                            </div>
-                                                                        )}
-
-                                                                        {(confirmState.status === 'success' || confirmState.status === 'error') && (
-                                                                            <div className={`p-3 rounded-lg border ${confirmState.status === 'success' ? 'bg-green-50 border-green-200 text-green-800' : 'bg-red-50 border-red-200 text-red-800'}`}>
-                                                                                <div className="flex items-center gap-2 mb-1 font-bold">
-                                                                                    {confirmState.status === 'success' ? <CheckCircleIcon className="w-5 h-5"/> : <ExclamationTriangleIcon className="w-5 h-5"/>}
-                                                                                    {confirmState.status === 'success' ? 'Confirmado' : 'Rechazado'}
-                                                                                </div>
-                                                                                <p className="text-xs">{confirmState.message}</p>
-                                                                            </div>
-                                                                        )}
-                                                                    </div>
-                                                                )}
-                                                            </div>
-                                                        )}
-                                                    </div>
-                                                </div>
-                                                
-                                                {selectedItem.expectedResult.visualUrls && selectedItem.expectedResult.visualUrls.length > 0 && (
-                                                    <div className="w-full">
-                                                        <p className="text-[10px] text-gray-500 font-bold mb-2 uppercase">Golden Samples</p>
-                                                        <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-                                                            {selectedItem.expectedResult.visualUrls.map((url, i) => (
-                                                                <div 
-                                                                    key={i} 
-                                                                    className="bg-white p-1 border border-gray-200 rounded-lg shadow-sm cursor-zoom-in relative group"
-                                                                    onClick={() => handleViewImage(url)}
-                                                                >
-                                                                    <img src={url} className="w-full h-24 object-cover rounded transition-transform group-hover:scale-105" alt={`Result ${i+1}`} />
-                                                                    <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-colors flex items-center justify-center rounded-lg">
-                                                                        <EyeIcon className="w-6 h-6 text-white opacity-0 group-hover:opacity-100 drop-shadow-md"/>
-                                                                    </div>
-                                                                </div>
-                                                            ))}
-                                                        </div>
-                                                    </div>
-                                                )}
-                                            </div>
-                                        </section>
-                                    )}
-                                </div>
-                            </div>
+                            <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="p-2 border border-gray-300 rounded-lg text-sm bg-white">
+                                <option value="">Todos los estados</option>
+                                <option value="active">Activa</option>
+                                <option value="review">Revisión</option>
+                                <option value="obsolete">Obsoleta</option>
+                                <option value="draft">Borrador</option>
+                            </select>
+                        </div>
+                        <div className="flex gap-2">
+                            <button onClick={() => setAssignOpen(true)} className="bg-white border border-gray-300 text-gray-700 hover:bg-gray-50 px-4 py-2 rounded-lg font-bold text-sm flex items-center gap-2">
+                                <UserIcon className="w-4 h-4"/> Asignar Tarea
+                            </button>
+                            <button onClick={() => { setSelectedInstr(null); setWizardOpen(true); }} className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg font-bold text-sm flex items-center gap-2 shadow-sm">
+                                <PlusCircleIcon className="w-4 h-4"/> Nueva Instrucción
+                            </button>
                         </div>
                     </div>
-                );
-            })()}
 
-            <style>{`
-                @keyframes slide-in-right {
-                    from { transform: translateX(100%); }
-                    to { transform: translateX(0); }
-                }
-                .animate-slide-in-right { animation: slide-in-right 0.3s ease-out forwards; }
-                .animate-fade-in { animation: fade-in 0.3s ease-out forwards; }
-            `}</style>
+                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 overflow-y-auto pb-4 custom-scrollbar">
+                        {filteredInstructions.map(instr => (
+                            <div key={instr.id} className="border border-gray-200 rounded-xl overflow-hidden hover:shadow-md transition-shadow bg-white flex flex-col group h-[340px]">
+                                <div className="h-32 bg-gray-100 relative shrink-0">
+                                    <img src={instr.thumbnailUrl} className="w-full h-full object-cover" alt="thumb"/>
+                                    <div className="absolute top-2 right-2 flex flex-col gap-1 items-end">
+                                        <StatusBadge status={instr.status} />
+                                    </div>
+                                    <div className="absolute bottom-2 left-2 bg-black/60 text-white text-[10px] px-2 py-0.5 rounded backdrop-blur-sm">
+                                        v{instr.version}
+                                    </div>
+                                </div>
+                                <div className="p-4 flex-1 flex flex-col">
+                                    <div className="flex justify-between items-start mb-2">
+                                        <div className="flex-1 mr-2">
+                                            <h4 className="font-bold text-gray-800 line-clamp-1 text-sm" title={instr.title}>{instr.title}</h4>
+                                            <span className="text-[10px] font-mono text-gray-500 bg-gray-50 px-1 rounded border border-gray-100">{instr.code}</span>
+                                        </div>
+                                    </div>
+                                    <p className="text-xs text-gray-600 line-clamp-3 mb-4 flex-1">{instr.objective}</p>
+                                    
+                                    <div className="flex flex-wrap gap-2 mb-4">
+                                        <ResourcePill count={instr.tools.length} icon={<WrenchScrewdriverIcon className="w-3 h-3"/>} color="border-gray-300 text-gray-600" title="Herramientas"/>
+                                        <ResourcePill count={instr.supplies.length} icon={<BeakerIcon className="w-3 h-3"/>} color="border-gray-300 text-gray-600" title="Insumos"/>
+                                        <div className="flex items-center gap-1 text-[10px] text-gray-500 ml-auto font-bold bg-gray-50 px-2 py-0.5 rounded">
+                                            <ClockIcon className="w-3 h-3"/> {instr.estimatedTime}
+                                        </div>
+                                    </div>
+
+                                    <div className="pt-3 border-t border-gray-100 flex justify-between items-center">
+                                        <div className="flex -space-x-2">
+                                            {['ES','EN'].map(l => (
+                                                <div key={l} className="w-5 h-5 rounded-full bg-gray-200 border border-white flex items-center justify-center text-[8px] font-bold text-gray-600" title="Idioma disponible">{l}</div>
+                                            ))}
+                                        </div>
+                                        <div className="flex gap-2">
+                                            <button onClick={() => { setSelectedInstr(instr); setWizardOpen(true); }} className="p-1.5 hover:bg-indigo-50 rounded text-gray-400 hover:text-indigo-600 transition-colors border border-transparent hover:border-indigo-100"><PencilIcon className="w-4 h-4"/></button>
+                                            <button className="p-1.5 hover:bg-green-50 rounded text-gray-400 hover:text-green-600 transition-colors border border-transparent hover:border-green-100" title="Asignar" onClick={() => {setAssignOpen(true);}}><ArrowUpOnSquareIcon className="w-4 h-4"/></button>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            )}
+
+            {viewMode === 'assignments' && (
+                <div className="flex-1 bg-white p-6 rounded-lg shadow-sm border border-gray-200 overflow-hidden flex flex-col">
+                    <ActiveAssignmentsDashboard 
+                        tasks={assignedTasks} 
+                        plants={plants} 
+                        onStartTask={handleStartTask}
+                        onOpenTask={handleOpenTask}
+                    />
+                </div>
+            )}
+
+            {viewMode === 'results' && (
+                <div className="flex-1 bg-white p-6 rounded-lg shadow-sm border border-gray-200 overflow-hidden flex flex-col">
+                    <div className="flex justify-between items-center mb-6">
+                        <h3 className="font-bold text-gray-800 text-lg flex items-center gap-2">
+                            <ChartBarIcon className="w-5 h-5 text-indigo-600"/> Tablero de Resultados
+                        </h3>
+                        <div className="flex gap-3 text-xs font-medium text-gray-500 bg-gray-50 px-3 py-1.5 rounded-full border border-gray-200">
+                            <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-green-500"></span> Completado</span>
+                            <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-blue-500"></span> En Progreso</span>
+                            <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-gray-300"></span> Pendiente</span>
+                        </div>
+                    </div>
+                    <div className="flex-1 overflow-y-auto custom-scrollbar">
+                        <ResultsDashboard tasks={assignedTasks} />
+                    </div>
+                </div>
+            )}
+
+            <CreateWizardModal 
+                isOpen={wizardOpen} 
+                onClose={() => { setWizardOpen(false); setSelectedInstr(null); }}
+                plants={plants} 
+                onSave={handleCreate} 
+                nextCode={`INS-NEW-${Math.floor(Math.random()*1000)}`}
+                initialData={selectedInstr}
+            />
+
+            <AssignInstructionModal 
+                isOpen={assignOpen} 
+                onClose={() => setAssignOpen(false)} 
+                instructions={instructions}
+                onAssign={handleAssign}
+            />
+
+            <ImageViewerModal 
+                isOpen={!!previewUrl} 
+                url={previewUrl} 
+                onClose={() => setPreviewUrl(null)} 
+            />
         </div>
     );
 };

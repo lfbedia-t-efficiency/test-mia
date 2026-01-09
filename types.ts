@@ -58,6 +58,16 @@ export const ViewTitle: Record<View, string> = {
     TA_PROCEDURES: 'Procedimientos',
 };
 
+// --- Context for AI Transitions ---
+export interface AiStartContext {
+    plantId?: string;
+    processId?: string;
+    subprocessId?: string;
+    machineId: string;
+    machineName: string;
+    intent: 'query' | 'report'; // query = Consultar Info, report = Reportar Falla
+}
+
 // --- History Types ---
 export type EventType = 'Consulta IA' | 'Orden de Trabajo' | 'Documento' | 'Diagnóstico' | 'Reclamo';
 export type Criticality = 'low' | 'medium' | 'high' | 'info';
@@ -229,15 +239,22 @@ export interface WorkOrderLog {
     comment?: string;
 }
 
+export interface SupplyItem {
+    id: string;
+    description: string;
+    quantity: string;
+}
+
 export interface TechnicalReport {
     inspections: string;
     measurements: string;
+    observations: string; // New field
     diagnosis: string;
     aiMatch: 'yes' | 'no' | null;
     rootCause: string;
     actions: string[]; // Selected checkboxes
     otherActionDetail: string;
-    supplies: string;
+    supplies: SupplyItem[];
     preventiveMeasures: string;
 }
 
@@ -261,6 +278,23 @@ export interface WorkOrder {
     machineStatus: MachineStatus;
     description: string;
     symptoms: string[];
+    operatingHours?: string;
+    safetyRisk?: string;
+    failureMoment?: string;
+
+    // Detailed Report Data
+    alarmCodes?: string;
+    alarmMessages?: string;
+    sinceWhen?: string;
+    frequency?: string;
+    productModel?: string;
+    recentAdjustments?: string; // "yes" | "no"
+    adjustmentsDetail?: string;
+    impactProduction?: string;
+    impactQuality?: string; // "yes" | "no"
+    defectType?: string;
+    defectDescription?: string;
+    evidenceFiles?: string[]; // URLs of attached files
     
     // AI Data (Pre-diagnosis)
     aiData?: {
@@ -286,4 +320,44 @@ export interface WorkOrder {
     logs: WorkOrderLog[];
     startedAt?: string;
     closedAt?: string;
+}
+
+// --- Admin Module Types ---
+
+export type AccessScope = 'Total' | 'Planta' | 'Proceso' | 'Subproceso';
+
+export interface UserAccessAssignment {
+    id: string;
+    scope: AccessScope;
+    plant?: string;
+    process?: string;
+    subprocess?: string;
+}
+
+export interface User {
+    id: string; // Consecutivo automatico de la plataforma (e.g., U-1001)
+    employeeId: string; // # Interno
+    name: string;
+    position: string; // Puesto
+    role: string;
+    whatsapp: string;
+    email: string;
+    status: 'active' | 'inactive';
+    accessAssignments: UserAccessAssignment[];
+    avatar?: string;
+    password?: string;
+}
+
+export interface Permission {
+    id: string;
+    name: string;
+    module: 'Audit' | 'Maintenance' | 'Docs' | 'Admin' | 'AI';
+    description: string;
+}
+
+export interface Role {
+    id: string;
+    name: string;
+    description: string;
+    permissions: string[]; // List of Permission IDs
 }

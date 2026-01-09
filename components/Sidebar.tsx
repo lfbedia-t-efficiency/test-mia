@@ -1,6 +1,7 @@
-import React from 'react';
+
+import React, { useMemo } from 'react';
 import { View } from '../types';
-import { AIAssistantIcon, HistoryIcon, AuditIcon, AlarmIcon, DocsIcon, PlantIcon, AdminIcon, SettingsIcon, ManufacturingIcon, ChevronDownIcon, CrmIcon, RhIcon, BookOpenIcon, EyeIcon, TEfficiencyIcon, ArrowUpIcon } from './icons/Icons';
+import { AIAssistantIcon, HistoryIcon, AuditIcon, AlarmIcon, DocsIcon, PlantIcon, AdminIcon, SettingsIcon, ManufacturingIcon, ChevronDownIcon, CrmIcon, RhIcon, BookOpenIcon, EyeIcon, TEfficiencyIcon, ArrowUpIcon, ClipboardDocumentCheckIcon } from './icons/Icons';
 
 interface SidebarProps {
   activeView: View;
@@ -9,45 +10,128 @@ interface SidebarProps {
   setIsOpen: (isOpen: boolean) => void;
   isCollapsed: boolean;
   setIsCollapsed: (isCollapsed: boolean) => void;
+  language: string;
 }
 
-const menuItems = [
-  { 
-    view: 'PRODUCTION_AUDIT', label: 'Auditoria Produccion Inteligente', icon: <AuditIcon />,
-    subItems: [
-      { view: 'PA_DASHBOARD', label: 'Dashboard Auditorias Produccion' },
-      { view: 'PA_COMPLIANCE_MAP', label: 'Mapa de Cumplimiento' },
-      { view: 'PA_FORMS', label: 'Reportes & Formatos' },
-    ]
-  },
-  { 
-    view: 'TECHNICAL_ASSISTANCE', label: 'Monitoreo Técnico Avanzado', icon: <AlarmIcon />,
-    subItems: [
-      { view: 'TA_DASHBOARD', label: 'Dashboard Mantenimiento' },
-      { view: 'TA_WORK_ORDERS', label: 'Órdenes de Trabajo' },
-      { view: 'TA_MACHINES', label: 'Maquinas' },
-    ]
-  },
-  {
-    view: 'DOCUMENT_CONTROL_SYSTEM', label: 'Control de Documentos', icon: <BookOpenIcon />,
-    subItems: [
-        { view: 'DOCUMENTS_BY_PROCESS', label: 'Documentos & Procedimientos' },
-        { view: 'CERTIFICATION_DOCUMENTS', label: 'Documentos Certificados' },
-        { view: 'WORK_INSTRUCTIONS', label: 'Instrucciones de Trabajo' }
-    ]
-  },
-  { view: 'AI_VISION_QUALITY', label: 'AI Vision Quality Check', icon: <EyeIcon /> },
-  { view: 'IA_CRM_ASSISTANT', label: 'AI Customer Service', icon: <CrmIcon /> },
-  { view: 'IA_RH_ASSISTANT', label: 'AI Employee Service', icon: <RhIcon /> },
-];
+const Sidebar: React.FC<SidebarProps> = ({ activeView, setActiveView, isOpen, isCollapsed, setIsCollapsed, language }) => {
+  
+  // Translation Dictionary
+  const getTranslatedLabels = (lang: string) => {
+      // Default to Spanish labels if not found
+      const labels: Record<string, any> = {
+          'Español': {
+              audit: 'Auditoria Produccion Inteligente',
+              audit_dash: 'Dashboard Auditorias Produccion',
+              audit_map: 'Mapa de Cumplimiento',
+              audit_forms: 'Reportes & Formatos',
+              maint: 'Monitoreo Técnico Avanzado',
+              maint_dash: 'Dashboard Mantenimiento',
+              maint_wo: 'Órdenes de Trabajo',
+              maint_mach: 'Maquinas',
+              docs: 'Control de Documentos',
+              docs_proc: 'Documentos & Procedimientos',
+              docs_cert: 'Documentos Certificados',
+              docs_inst: 'Instrucciones de Trabajo',
+              ai_vision: 'AI Vision Quality Check',
+              ai_crm: 'AI Customer Service',
+              ai_rh: 'AI Employee Service',
+              system: 'Sistema',
+              plants: 'Plants & Processes',
+              admin: 'Admin'
+          },
+          'English': {
+              audit: 'Intelligent Production Audit',
+              audit_dash: 'Production Audit Dashboard',
+              audit_map: 'Compliance Map',
+              audit_forms: 'Reports & Forms',
+              maint: 'Advanced Tech Monitoring',
+              maint_dash: 'Maintenance Dashboard',
+              maint_wo: 'Work Orders',
+              maint_mach: 'Machines',
+              docs: 'Document Control',
+              docs_proc: 'Documents & Procedures',
+              docs_cert: 'Certified Documents',
+              docs_inst: 'Work Instructions',
+              ai_vision: 'AI Vision Quality Check',
+              ai_crm: 'AI Customer Service',
+              ai_rh: 'AI Employee Service',
+              system: 'System',
+              plants: 'Plants & Processes',
+              admin: 'Admin'
+          },
+          'Deutsch': {
+              audit: 'Intelligente Produktionsprüfung',
+              audit_dash: 'Produktions-Dashboard',
+              audit_map: 'Compliance-Karte',
+              audit_forms: 'Berichte & Formulare',
+              maint: 'Erweiterte Überwachung',
+              maint_dash: 'Wartungs-Dashboard',
+              maint_wo: 'Arbeitsaufträge',
+              maint_mach: 'Maschinen',
+              docs: 'Dokumentenkontrolle',
+              docs_proc: 'Dokumente & Verfahren',
+              docs_cert: 'Zertifizierte Dokumente',
+              docs_inst: 'Arbeitsanweisungen',
+              ai_vision: 'KI-Qualitätsprüfung',
+              ai_crm: 'KI-Kundendienst',
+              ai_rh: 'KI-Mitarbeiterdienst',
+              system: 'System',
+              plants: 'Anlagen & Prozesse',
+              admin: 'Verwaltung'
+          },
+          // Basic fallback for other languages (using English structure as base)
+          'Français': { audit: 'Audit de Production', maint: 'Surveillance Technique', docs: 'Contrôle Documentaire', system: 'Système', admin: 'Admin', ai_vision: 'Contrôle Qualité IA', ai_crm: 'Service Client IA', ai_rh: 'Service RH IA' },
+          'Português': { audit: 'Auditoria de Produção', maint: 'Monitoramento Técnico', docs: 'Controle de Documentos', system: 'Sistema', admin: 'Admin', ai_vision: 'Visão Computacional IA', ai_crm: 'Atendimento IA', ai_rh: 'RH IA' },
+          'Italiano': { audit: 'Revisione Produzione', maint: 'Monitoraggio Tecnico', docs: 'Controllo Documenti', system: 'Sistema', admin: 'Admin', ai_vision: 'Visione Artificiale', ai_crm: 'Assistenza Clienti IA', ai_rh: 'Risorse Umane IA' },
+          'Pусский': { audit: 'Аудит производства', maint: 'Технический мониторинг', docs: 'Управление документами', system: 'Система', admin: 'Админ', ai_vision: 'ИИ контроль качества', ai_crm: 'ИИ обслуживание', ai_rh: 'ИИ HR' },
+          'العربية': { audit: 'تدقيق الإنتاج', maint: 'المراقبة الفنية', docs: 'مراقبة الوثائق', system: 'نظام', admin: 'مشرف', ai_vision: 'فحص الجودة بالذكاء الاصطناعي', ai_crm: 'خدمة العملاء بالذكاء الاصطناعي', ai_rh: 'موارد بشرية بالذكاء الاصطناعي' },
+          '中文': { audit: '智能生产审核', maint: '高级技术监控', docs: '文件控制', system: '系统', admin: '管理', ai_vision: 'AI视觉质量检查', ai_crm: 'AI客户服务', ai_rh: 'AI员工服务' },
+          '日本語': { audit: 'インテリジェント生産監査', maint: '高度な技術監視', docs: '文書管理', system: 'システム', admin: '管理', ai_vision: 'AIビジョン品質チェック', ai_crm: 'AIカスタマーサービス', ai_rh: 'AI従業員サービス' },
+          '한국어': { audit: '지능형 생산 감사', maint: '고급 기술 모니터링', docs: '문서 제어', system: '시스템', admin: '관리', ai_vision: 'AI 비전 품질 확인', ai_crm: 'AI 고객 서비스', ai_rh: 'AI 직원 서비스' }
+      };
 
-const bottomMenuItems = [
-    { view: 'PLANTS_PROCESS', label: 'Plants & Processes', icon: <PlantIcon /> },
-    { view: 'ADMINISTRATION', label: 'Admin', icon: <AdminIcon /> },
-    { view: 'SETTINGS', label: 'Config', icon: <SettingsIcon /> },
-]
+      const selected = labels[lang] || labels['English']; // Fallback
+      // Merge with default english/spanish if keys missing in other langs
+      return { ...labels['English'], ...selected };
+  };
 
-const Sidebar: React.FC<SidebarProps> = ({ activeView, setActiveView, isOpen, isCollapsed, setIsCollapsed }) => {
+  const t = getTranslatedLabels(language);
+
+  const menuItems = useMemo(() => [
+    { 
+      view: 'PRODUCTION_AUDIT', label: t.audit, icon: <AuditIcon />,
+      subItems: [
+        { view: 'PA_DASHBOARD', label: t.audit_dash },
+        { view: 'PA_COMPLIANCE_MAP', label: t.audit_map },
+        { view: 'PA_FORMS', label: t.audit_forms },
+      ]
+    },
+    { 
+      view: 'TECHNICAL_ASSISTANCE', label: t.maint, icon: <AlarmIcon />,
+      subItems: [
+        { view: 'TA_DASHBOARD', label: t.maint_dash },
+        { view: 'TA_WORK_ORDERS', label: t.maint_wo },
+        { view: 'TA_MACHINES', label: t.maint_mach },
+      ]
+    },
+    {
+      view: 'DOCUMENT_CONTROL_SYSTEM', label: t.docs, icon: <BookOpenIcon />,
+      subItems: [
+          { view: 'DOCUMENTS_BY_PROCESS', label: t.docs_proc },
+          { view: 'CERTIFICATION_DOCUMENTS', label: t.docs_cert },
+          { view: 'WORK_INSTRUCTIONS', label: t.docs_inst, icon: <ClipboardDocumentCheckIcon className="w-4 h-4"/> }
+      ]
+    },
+    { view: 'AI_VISION_QUALITY', label: t.ai_vision, icon: <EyeIcon /> },
+    { view: 'IA_CRM_ASSISTANT', label: t.ai_crm, icon: <CrmIcon /> },
+    { view: 'IA_RH_ASSISTANT', label: t.ai_rh, icon: <RhIcon /> },
+  ], [t]);
+
+  const bottomMenuItems = useMemo(() => [
+      { view: 'PLANTS_PROCESS', label: t.plants, icon: <PlantIcon /> },
+      { view: 'ADMINISTRATION', label: t.admin, icon: <AdminIcon /> },
+  ], [t]);
+
   
   const NavLink: React.FC<{ view: string; label: string; icon?: React.ReactNode; isSubItem?: boolean }> = ({ view, label, icon, isSubItem }) => (
       <button
@@ -113,7 +197,7 @@ const Sidebar: React.FC<SidebarProps> = ({ activeView, setActiveView, isOpen, is
                                     view={subItem.view} 
                                     label={subItem.label} 
                                     isSubItem 
-                                    icon={isCollapsed ? <div className="w-1.5 h-1.5 rounded-full bg-gray-300"></div> : undefined}
+                                    icon={(subItem as any).icon || (isCollapsed ? <div className="w-1.5 h-1.5 rounded-full bg-gray-300"></div> : undefined)}
                                 />
                             ))}
                         </div>
@@ -128,7 +212,7 @@ const Sidebar: React.FC<SidebarProps> = ({ activeView, setActiveView, isOpen, is
 
         {/* System Section */}
         <div className="mt-6 border-t border-gray-100 pt-2">
-            <SectionHeader label="Sistema" />
+            <SectionHeader label={t.system} />
             {bottomMenuItems.map((item) => (
                 <NavLink key={item.view} view={item.view} label={item.label} icon={item.icon} />
             ))}
